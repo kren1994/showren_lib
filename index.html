@@ -447,8 +447,31 @@
     const boardControlsAnchor = document.createComment('board-controls-anchor');
     leftPane.insertBefore(boardControlsAnchor, boardControls);
 
-    let tree = {}, currentNodeId = 'r';
+    // 木はフラットな型付き配列で持つ（first-child / next-sibling 方式）。
+    // 数百万ノードの研究ファイルでも、1ノードあたり ~15 バイトに収まり、
+    // ノードごとの JS オブジェクトを作らないのでスマホのメモリ予算に収まる。
+    // ルートは id 0（x = -1）。コメント/盤上テキストは疎なので Map に持つ。
+    const lib = {
+        count: 0,
+        xs: null,          // Int8Array   着手 x（ルートは -1）
+        ys: null,          // Int8Array   着手 y
+        moves: null,       // Uint8Array  手数（= 深さ）
+        parents: null,     // Int32Array  親 id（ルートは -1）
+        firstChild: null,  // Int32Array  最初の子（無ければ -1）
+        nextSibling: null, // Int32Array  次の兄弟（無ければ -1）
+        lastSel: null,     // Int32Array  最後に選んだ子（無ければ -1）
+        comments: null,    // Map<id, string>
+        texts: null,       // Map<id, string>
+    };
+    let currentNode = 0;
     let showHints = true, showCoords = true, showMoveNumbers = true;
+
+    function childCountAtLeast(id, n) {
+        let c = lib.firstChild[id];
+        let seen = 0;
+        while (c !== -1 && seen < n) { seen++; c = lib.nextSibling[c]; }
+        return seen >= n;
+    }
     let stoneShadingEnabled = false;
     // Palette principle (from playren): the board is always a step darker than
     // the white stone (~#f7f4ee), the gradient span is narrow so stones read the
@@ -556,15 +579,24 @@
     }
 
     function initGame() {
-        tree = { 'r': { i: 'r', p: null, c: [], x: null, y: null, o: 0, m: 0, cm: '', tx: '' } };
-        currentNodeId = 'r';
+        lib.count = 1;
+        lib.xs = new Int8Array([-1]);
+        lib.ys = new Int8Array([-1]);
+        lib.moves = new Uint8Array(1);
+        lib.parents = new Int32Array([-1]);
+        lib.firstChild = new Int32Array([-1]);
+        lib.nextSibling = new Int32Array([-1]);
+        lib.lastSel = new Int32Array([-1]);
+        lib.comments = new Map();
+        lib.texts = new Map();
+        currentNode = 0;
         setupCanvas();
         updateUI();
     }
 
     function updateUI() {
         ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
-        commentArea.value = tree[currentNodeId].cm || '';
+        commentArea.value = lib.comments.get(currentNode) || '';
         drawStonesAndMarks();
     }
 
@@ -753,11 +785,12 @@
     }
 
     function drawStonesAndMarks() {
-        let path = []; let curr = tree[currentNodeId];
-        while (curr && curr.i !== 'r') { path.unshift(curr); curr = tree[curr.p]; }
-        for (let node of path) {
-            let sx = MARGIN_L + node.x * CELL_SIZE, sy = MARGIN_T + node.y * CELL_SIZE;
-            const isBlack = node.o === 1;
+        const path = [];
+        for (let id = currentNode; id > 0; id = lib.parents[id]) path.unshift(id);
+        for (const id of path) {
+            let sx = MARGIN_L + lib.xs[id] * CELL_SIZE, sy = MARGIN_T + lib.ys[id] * CELL_SIZE;
+            const isBlack = lib.moves[id] % 2 === 1;
+            const node = { m: lib.moves[id] };
             drawStoneBody(sx, sy, CELL_SIZE * 0.45, isBlack);
             if (showMoveNumbers) {
                 const moveText = node.m.toString();
@@ -796,14 +829,14 @@
 
         // 候補手 = 現在ノードの子。盤上テキストがあれば文字、なければ点で示す。
         if (showHints) {
-            for (const cid of tree[currentNodeId].c) {
-                const child = tree[cid];
-                const sx = MARGIN_L + child.x * CELL_SIZE, sy = MARGIN_T + child.y * CELL_SIZE;
-                if (child.tx) {
-                    const size = Math.floor(CELL_SIZE * (child.tx.length >= 3 ? 0.34 : (child.tx.length === 2 ? 0.42 : 0.48)));
+            for (let cid = lib.firstChild[currentNode]; cid !== -1; cid = lib.nextSibling[cid]) {
+                const sx = MARGIN_L + lib.xs[cid] * CELL_SIZE, sy = MARGIN_T + lib.ys[cid] * CELL_SIZE;
+                const tx = lib.texts.get(cid) || '';
+                if (tx) {
+                    const size = Math.floor(CELL_SIZE * (tx.length >= 3 ? 0.34 : (tx.length === 2 ? 0.42 : 0.48)));
                     ctx.font = `bold ${size}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'; ctx.lineWidth = 3.5; ctx.strokeText(child.tx, sx, sy);
-                    ctx.fillStyle = '#555'; ctx.fillText(child.tx, sx, sy);
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'; ctx.lineWidth = 3.5; ctx.strokeText(tx, sx, sy);
+                    ctx.fillStyle = '#555'; ctx.fillText(tx, sx, sy);
                 } else {
                     ctx.beginPath(); ctx.fillStyle = 'rgba(128, 128, 128, 0.8)';
                     ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
@@ -946,24 +979,20 @@
         if (px < 0 || px >= BOARD_SIZE || py < 0 || py >= BOARD_SIZE) return;
 
         // 候補手をクリック → その手へ。経路上の石をクリック → その手まで戻る。
-        const node = tree[currentNodeId];
-        for (const cid of node.c) {
-            if (tree[cid].x === px && tree[cid].y === py) {
-                node.l = cid;
-                currentNodeId = cid;
+        for (let cid = lib.firstChild[currentNode]; cid !== -1; cid = lib.nextSibling[cid]) {
+            if (lib.xs[cid] === px && lib.ys[cid] === py) {
+                lib.lastSel[currentNode] = cid;
+                currentNode = cid;
                 updateUI();
                 return;
             }
         }
-        let temp = currentNodeId;
-        while (temp !== null) {
-            const n = tree[temp];
-            if (n.p !== null && n.x === px && n.y === py) {
-                currentNodeId = temp;
+        for (let id = currentNode; id > 0; id = lib.parents[id]) {
+            if (lib.xs[id] === px && lib.ys[id] === py) {
+                currentNode = id;
                 updateUI();
                 return;
             }
-            temp = n.p;
         }
     });
 
@@ -1013,10 +1042,8 @@
 
     function getCurrentMovePath() {
         const path = [];
-        let curr = tree[currentNodeId];
-        while (curr && curr.i !== 'r') {
-            path.unshift(curr);
-            curr = tree[curr.p];
+        for (let id = currentNode; id > 0; id = lib.parents[id]) {
+            path.unshift({ x: lib.xs[id], y: lib.ys[id] });
         }
         return path;
     }
@@ -1091,38 +1118,29 @@
         toggleMoveNumbers();
     }
 
-    function getPreferredChildId(node) {
-        if (!node) return null;
-        const validChildren = node.c.filter((id) => tree[id]);
-        if (validChildren.length !== node.c.length) {
-            node.c = validChildren;
-        }
-
-        if (!validChildren.length) {
-            if (node.l && !tree[node.l]) node.l = null;
-            return null;
-        }
-
-        if (node.l && tree[node.l] && validChildren.includes(node.l)) {
-            return node.l;
-        }
-
-        node.l = validChildren[0];
-        return node.l;
+    function getPreferredChildId(id) {
+        const last = lib.lastSel[id];
+        if (last !== -1) return last;
+        return lib.firstChild[id];
     }
 
-    function goBack() { if (tree[currentNodeId].p) { currentNodeId = tree[currentNodeId].p; updateUI(); } }
+    function goBack() { if (lib.parents[currentNode] !== -1) { currentNode = lib.parents[currentNode]; updateUI(); } }
     function goNext() {
-        let node = tree[currentNodeId], target = getPreferredChildId(node);
-        if (target) { currentNodeId = target; updateUI(); }
+        const target = getPreferredChildId(currentNode);
+        if (target !== -1) { currentNode = target; updateUI(); }
     }
-    function goToPrevBranch() { let curr = tree[currentNodeId]; while (curr.p) { curr = tree[curr.p]; if (curr.c.length > 1 || curr.i === 'r') { currentNodeId = curr.i; updateUI(); return; } } }
+    function goToPrevBranch() {
+        let curr = currentNode;
+        while (lib.parents[curr] !== -1) {
+            curr = lib.parents[curr];
+            if (childCountAtLeast(curr, 2) || curr === 0) { currentNode = curr; updateUI(); return; }
+        }
+    }
     function goToNextBranch() {
-        let curr = tree[currentNodeId], target = getPreferredChildId(curr);
-        while (target) {
-            curr = tree[target];
-            if (curr.c.length > 1 || curr.c.length === 0) { currentNodeId = curr.i; updateUI(); return; }
-            target = getPreferredChildId(curr);
+        let target = getPreferredChildId(currentNode);
+        while (target !== -1) {
+            if (childCountAtLeast(target, 2) || lib.firstChild[target] === -1) { currentNode = target; updateUI(); return; }
+            target = getPreferredChildId(target);
         }
     }
 
@@ -1225,74 +1243,28 @@
         const comment = (flag & 0x08) ? readString() : null;
         const text = (flag & 0x01) ? readString() : null;
         return {
-            node: { x, y, comment, text, children: [] },
+            x, y, comment, text,
             hasChild: !(flag & 0x40),
             hasSibling: !!(flag & 0x80),
             offset,
         };
     }
 
-    // DFS 直列化を復元し、仮想ルート（x=-1）を頂点とする中間木を返す。
-    function parseLibTree(bytes) {
-        if (bytes.length < 20 || !LIB_MAGIC.every((b, i) => bytes[i] === b)) return null;
-        let entry = readLibEntry(bytes, 20);
-        if (!entry) return null;
-        let root;
-        let { node, hasChild, hasSibling, offset } = entry;
-        if (node.x < 0) {
-            root = node; // 先頭が手なしノード＝ルート（コメントも保持）
-            if (!hasChild) return root;
-            entry = readLibEntry(bytes, offset);
-            if (!entry) return root;
-            ({ node, hasChild, hasSibling, offset } = entry);
-        } else {
-            root = { x: -1, y: -1, comment: null, text: null, children: [] };
-        }
-        root.children.push(node);
-
-        // 行き(stage 0)で子を読み、帰り(stage 1)で兄弟を読む明示スタック DFS。
-        const stack = [[node, root, 0, hasChild, hasSibling]];
-        while (stack.length) {
-            const frame = stack[stack.length - 1];
-            if (frame[2] === 0) {
-                frame[2] = 1;
-                if (frame[3]) {
-                    const child = readLibEntry(bytes, offset);
-                    if (child) {
-                        offset = child.offset;
-                        frame[0].children.push(child.node);
-                        stack.push([child.node, frame[0], 0, child.hasChild, child.hasSibling]);
-                    }
-                }
-            } else {
-                stack.pop();
-                if (frame[4]) {
-                    const sib = readLibEntry(bytes, offset);
-                    if (sib) {
-                        offset = sib.offset;
-                        frame[1].children.push(sib.node);
-                        stack.push([sib.node, frame[1], 0, sib.hasChild, sib.hasSibling]);
-                    }
-                }
-            }
-        }
-        return root;
-    }
-
-    // 全文字列を連結し、厳密デコードが通る最初の候補を返す。gb18030 は
-    // ほぼ全バイト列を受理してしまうため最後に置く（shift_jis は GBK の
-    // データで高確率で失敗するので先に試せる）。
-    function detectLibEncoding(root) {
+    // 文字コード判定: 木を組み立てずにエントリを線形に読み飛ばしながら
+    // 文字列バイトだけを集める（エントリは DFS 順に連続して並ぶため可能）。
+    // gb18030 はほぼ全バイト列を受理してしまうため最後に置く（shift_jis は
+    // GBK のデータで高確率で失敗するので先に試せる）。
+    function detectLibEncoding(bytes) {
         const chunks = [];
-        const stack = [root];
-        while (stack.length) {
-            const n = stack.pop();
-            if (n.comment && n.comment.length) chunks.push(n.comment);
-            if (n.text && n.text.length) chunks.push(n.text);
-            for (const c of n.children) stack.push(c);
-        }
         let total = 0;
-        for (const c of chunks) total += c.length + 1;
+        let offset = 20;
+        while (true) {
+            const entry = readLibEntry(bytes, offset);
+            if (!entry) break;
+            offset = entry.offset;
+            if (entry.comment && entry.comment.length) { chunks.push(entry.comment); total += entry.comment.length + 1; }
+            if (entry.text && entry.text.length) { chunks.push(entry.text); total += entry.text.length + 1; }
+        }
         const blob = new Uint8Array(total);
         let pos = 0;
         for (const c of chunks) { blob.set(c, pos); pos += c.length; blob[pos++] = 10; }
@@ -1305,68 +1277,133 @@
         return 'gb18030';
     }
 
-    // 中間木 → showren と同じ形のノード木。無効手（盤外・重複着手）は
+    // DFS 直列化を 1 パスでフラット配列へ復元する。中間の木もノードごとの
+    // オブジェクトも作らないので、数百万ノードでもメモリはノードあたり
+    // ~15 バイト + コメント/テキスト分に収まる。無効手（盤外・重複着手）は
     // 木に載せず、その子を親へ繋ぎ替える。重複する兄弟は合流させる。
     function loadFromLibBytes(bytes) {
-        const root = parseLibTree(bytes);
-        if (!root) {
+        if (bytes.length < 20 || !LIB_MAGIC.every((b, i) => bytes[i] === b)) {
             alert(getCurrentTranslation().loadFailed);
             return;
         }
-        const decoder = new TextDecoder(detectLibEncoding(root));
-        const decode = (raw) => raw && raw.length
-            ? decoder.decode(raw).replace(/\r\n/g, '\n').trim()
-            : '';
+        const decoder = new TextDecoder(detectLibEncoding(bytes));
+        const interned = new Map(); // 'C' 等の頻出短文字列を共有してメモリ節約
+        const decode = (raw) => {
+            if (!raw || !raw.length) return '';
+            const s = decoder.decode(raw).replace(/\r\n/g, '\n').trim();
+            if (s.length <= 8) {
+                const hit = interned.get(s);
+                if (hit !== undefined) return hit;
+                interned.set(s, s);
+            }
+            return s;
+        };
 
-        const newTree = { 'r': { i: 'r', p: null, c: [], x: null, y: null, o: 0, m: 0, cm: decode(root.comment), tx: '' } };
-        const kids = { 'r': {} };
+        // 1 ノード平均 3 バイトで見積もり、足りなければ倍々で伸ばす
+        let cap = Math.max(1024, (bytes.length / 3) | 0);
+        let xs = new Int8Array(cap), ys = new Int8Array(cap);
+        let moves = new Uint8Array(cap);
+        let parents = new Int32Array(cap), firstChild = new Int32Array(cap);
+        let nextSibling = new Int32Array(cap), lastSel = new Int32Array(cap);
+        xs[0] = -1; ys[0] = -1;
+        parents[0] = -1; firstChild[0] = -1; nextSibling[0] = -1; lastSel[0] = -1;
+        const comments = new Map(), texts = new Map();
+        let count = 1;
         const grid = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
-        let nextId = 1;
 
-        // フレーム: [中間ノード, showren親id, 子index, このフレームで置いたセル or -1]
-        const stack = [[root, 'r', 0, -1]];
-        while (stack.length) {
-            const frame = stack[stack.length - 1];
-            const libNode = frame[0], parentId = frame[1];
-            if (frame[2] >= libNode.children.length) {
-                stack.pop();
-                if (frame[3] >= 0) grid[frame[3]] = 0;
-                continue;
+        const grow = () => {
+            cap *= 2;
+            const g = (arr, T) => { const n = new T(cap); n.set(arr); return n; };
+            xs = g(xs, Int8Array); ys = g(ys, Int8Array); moves = g(moves, Uint8Array);
+            parents = g(parents, Int32Array); firstChild = g(firstChild, Int32Array);
+            nextSibling = g(nextSibling, Int32Array); lastSel = g(lastSel, Int32Array);
+        };
+
+        // 親 parentId へ (x, y) の子を付ける。既存なら合流（文字列は先勝ち）。
+        const attach = (parentId, x, y, comment, text) => {
+            let prev = -1;
+            for (let c = firstChild[parentId]; c !== -1; c = nextSibling[c]) {
+                if (xs[c] === x && ys[c] === y) {
+                    if (comment && !comments.has(c)) { const s = decode(comment); if (s) comments.set(c, s); }
+                    if (text && !texts.has(c)) { const s = decode(text); if (s) texts.set(c, s); }
+                    return c;
+                }
+                prev = c;
             }
-            const child = libNode.children[frame[2]++];
-            const cell = (child.x >= 0 && child.x < BOARD_SIZE && child.y >= 0 && child.y < BOARD_SIZE)
-                ? child.x * BOARD_SIZE + child.y : -1;
-            if (cell < 0 || grid[cell]) {
-                stack.push([child, parentId, 0, -1]); // 無効手: 子を親へ繋ぎ替え
-                continue;
+            if (count >= cap) grow();
+            const id = count++;
+            xs[id] = x; ys[id] = y; moves[id] = moves[parentId] + 1;
+            parents[id] = parentId; firstChild[id] = -1; nextSibling[id] = -1; lastSel[id] = -1;
+            if (prev === -1) firstChild[parentId] = id; else nextSibling[prev] = id;
+            if (comment) { const s = decode(comment); if (s) comments.set(id, s); }
+            if (text) { const s = decode(text); if (s) texts.set(id, s); }
+            return id;
+        };
+
+        let entry = readLibEntry(bytes, 20);
+        if (!entry) {
+            alert(getCurrentTranslation().loadFailed);
+            return;
+        }
+        let offset = entry.offset;
+        let rootComment = '';
+        if (entry.x < 0) {
+            rootComment = decode(entry.comment); // 先頭の手なしノード＝ルート
+            if (!entry.hasChild) {
+                initGame();
+                if (rootComment) lib.comments.set(0, rootComment);
+                updateUI();
+                return;
             }
-            const parent = newTree[parentId];
-            const moveNo = parent.m + 1;
-            const color = moveNo % 2 === 1 ? 1 : 2;
-            let nodeId = kids[parentId][cell];
-            if (nodeId === undefined) {
-                nodeId = String(nextId++);
-                newTree[nodeId] = {
-                    i: nodeId, p: parentId, c: [],
-                    x: child.x, y: child.y, o: color, m: moveNo,
-                    cm: decode(child.comment), tx: decode(child.text),
-                };
-                parent.c.push(nodeId);
-                kids[parentId][cell] = nodeId;
-                kids[nodeId] = {};
-            } else {
-                // 合流: 既存ノードが空欄ならコメント/テキストを引き継ぐ（先勝ち）
-                const existing = newTree[nodeId];
-                if (!existing.cm) existing.cm = decode(child.comment);
-                if (!existing.tx) existing.tx = decode(child.text);
+            entry = readLibEntry(bytes, offset);
+            if (!entry) {
+                initGame();
+                if (rootComment) lib.comments.set(0, rootComment);
+                updateUI();
+                return;
             }
-            if (!('l' in parent)) parent.l = nodeId;
-            grid[cell] = color;
-            stack.push([child, nodeId, 0, cell]);
+            offset = entry.offset;
         }
 
-        tree = newTree;
-        currentNodeId = 'r';
+        // フレーム: [有効ノードid, 親有効id, stage, hasChild, hasSibling, 置いたセル]
+        const enter = (e, parentEff) => {
+            const cell = (e.x >= 0 && e.x < BOARD_SIZE && e.y >= 0 && e.y < BOARD_SIZE)
+                ? e.x * BOARD_SIZE + e.y : -1;
+            if (cell < 0 || grid[cell]) {
+                return [parentEff, parentEff, 0, e.hasChild, e.hasSibling, -1]; // 繋ぎ替え
+            }
+            const id = attach(parentEff, e.x, e.y, e.comment, e.text);
+            grid[cell] = moves[id] % 2 === 1 ? 1 : 2;
+            return [id, parentEff, 0, e.hasChild, e.hasSibling, cell];
+        };
+
+        // 行き(stage 0)で子を読み、帰り(stage 1)で盤を戻して兄弟を読む。
+        const stack = [enter(entry, 0)];
+        while (stack.length) {
+            const frame = stack[stack.length - 1];
+            if (frame[2] === 0) {
+                frame[2] = 1;
+                if (frame[3]) {
+                    const child = readLibEntry(bytes, offset);
+                    if (child) { offset = child.offset; stack.push(enter(child, frame[0])); }
+                }
+            } else {
+                stack.pop();
+                if (frame[5] >= 0) grid[frame[5]] = 0;
+                if (frame[4]) {
+                    const sib = readLibEntry(bytes, offset);
+                    if (sib) { offset = sib.offset; stack.push(enter(sib, frame[1])); }
+                }
+            }
+        }
+
+        lib.count = count;
+        lib.xs = xs; lib.ys = ys; lib.moves = moves;
+        lib.parents = parents; lib.firstChild = firstChild;
+        lib.nextSibling = nextSibling; lib.lastSel = lastSel;
+        lib.comments = comments; lib.texts = texts;
+        if (rootComment) comments.set(0, rootComment);
+        currentNode = 0;
         updateUI();
     }
 

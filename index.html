@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#f3efe6">
+    <title>連珠 ライブラリビューア</title>
+    <script>
+        // Apply the chosen color scheme before first paint (no flash).
+        // Default is light; options are light / gray / dark (no OS auto-follow).
+        try {
+            const s = JSON.parse(localStorage.getItem('showren-lib-settings') || 'null');
+            const scheme = s && ['light', 'gray', 'dark'].includes(s.colorScheme) ? s.colorScheme : 'light';
+            document.documentElement.dataset.theme = scheme;
+            const meta = document.querySelector('meta[name="theme-color"]');
+            if (meta) meta.content = { light: '#f3efe6', gray: '#2a241d', dark: '#1a1613' }[scheme];
+        } catch (e) { /* first visit */ }
+    </script>
+    <style>
+        :root {
+            /* 紙 (paper) — light. Mirrors playren's design language. */
+            --bg: #f3efe6;
+            --bg-accent: #e8ddc9;
+            --bg-glow: rgba(255, 255, 255, 0.68);
+            --panel: rgba(255, 252, 246, 0.9);
+            --panel-strong: #fffaf1;
+            --overlay: rgba(255, 252, 246, 0.94);
+            --fill-soft: rgba(74, 54, 34, 0.055);
+            --hairline: rgba(74, 54, 34, 0.1);
+            --line: rgba(74, 54, 34, 0.18);
+            --field-line: rgba(74, 54, 34, 0.12);
+            --tint-hover: rgba(23, 89, 74, 0.07);
+            --tint-active: rgba(23, 89, 74, 0.12);
+            --focus-ring: rgba(23, 89, 74, 0.45);
+            --text: #2f2418;
+            --muted: #7b6855;
+            --faint: #a3927c;
+            --accent: #17594a;
+            --accent-strong: #0f4338;
+            --accent-soft: rgba(23, 89, 74, 0.12);
+            --danger: #8b2f28;
+            --danger-soft: rgba(139, 47, 40, 0.08);
+            --shadow-color: rgba(63, 43, 21, 0.2);
+            --stone-black-rim: rgba(47, 36, 24, 0.25);
+            --stone-white-rim: rgba(74, 54, 34, 0.35);
+            --board-grid: rgba(63, 42, 19, 0.9);
+            --board-coord: rgba(63, 42, 19, 0.78);
+            --board-star: rgba(51, 33, 17, 0.82);
+            --board-dim: none;
+            color-scheme: light;
+        }
+        /* 夜の和紙: dark charcoal paper; the wood board stays light and becomes
+           the single bright object. Applied on OS-dark (unless forced light)
+           or when forced dark. */
+        /* Manual color scheme only (no OS auto-follow):
+           gray = warm dark paper, dark = deeper near-black. */
+        :root[data-theme="gray"] {
+            --bg: #2a241d;
+            --bg-accent: #332c22;
+            --bg-glow: rgba(255, 244, 224, 0.06);
+            --panel: rgba(54, 47, 38, 0.92);
+            --panel-strong: #3a3228;
+            --overlay: rgba(50, 43, 34, 0.96);
+            --fill-soft: rgba(236, 224, 202, 0.08);
+            --hairline: rgba(236, 224, 202, 0.14);
+            --line: rgba(236, 224, 202, 0.2);
+            --field-line: rgba(236, 224, 202, 0.18);
+            --tint-hover: rgba(99, 199, 170, 0.09);
+            --tint-active: rgba(99, 199, 170, 0.16);
+            --focus-ring: rgba(99, 199, 170, 0.5);
+            --text: #ece3d3;
+            --muted: #b0a189;
+            --faint: #94856f;
+            --accent: #46a98c;
+            --accent-strong: #63c7aa;
+            --accent-soft: rgba(99, 199, 170, 0.16);
+            --danger: #e0796a;
+            --danger-soft: rgba(224, 121, 106, 0.12);
+            --shadow-color: rgba(0, 0, 0, 0.5);
+            --stone-black-rim: rgba(233, 218, 191, 0.4);
+            --stone-white-rim: rgba(233, 218, 191, 0.2);
+            --board-dim: brightness(0.96);
+            color-scheme: dark;
+        }
+        :root[data-theme="dark"] {
+            --bg: #1a1613;
+            --bg-accent: #231d16;
+            --bg-glow: rgba(255, 244, 224, 0.05);
+            --panel: rgba(38, 32, 25, 0.92);
+            --panel-strong: #2a231b;
+            --overlay: rgba(34, 28, 22, 0.95);
+            --fill-soft: rgba(233, 218, 191, 0.07);
+            --hairline: rgba(233, 218, 191, 0.12);
+            --line: rgba(233, 218, 191, 0.18);
+            --field-line: rgba(233, 218, 191, 0.16);
+            --tint-hover: rgba(99, 199, 170, 0.09);
+            --tint-active: rgba(99, 199, 170, 0.16);
+            --focus-ring: rgba(99, 199, 170, 0.5);
+            --text: #ece3d3;
+            --muted: #a3947d;
+            --faint: #8a7c68;
+            --accent: #46a98c;
+            --accent-strong: #63c7aa;
+            --accent-soft: rgba(99, 199, 170, 0.16);
+            --danger: #e0796a;
+            --danger-soft: rgba(224, 121, 106, 0.12);
+            --shadow-color: rgba(0, 0, 0, 0.5);
+            --stone-black-rim: rgba(233, 218, 191, 0.4);
+            --stone-white-rim: rgba(233, 218, 191, 0.2);
+            --board-dim: brightness(0.93);
+            color-scheme: dark;
+        }
+        html {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+            background: var(--bg-accent);
+        }
+        /* Keyboard focus: one consistent accent ring app-wide. */
+        :focus-visible {
+            outline: 2px solid var(--focus-ring);
+            outline-offset: 2px;
+        }
+        body {
+            --bottom-controls-offset: calc(8px + env(safe-area-inset-bottom, 0px));
+            --bottom-controls-height: 64px;
+            --bottom-controls-space: calc(var(--bottom-controls-height) + var(--bottom-controls-offset));
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top, var(--bg-glow), transparent 42%),
+                linear-gradient(180deg, var(--bg) 0%, var(--bg-accent) 100%);
+            background-color: var(--bg-accent);
+            background-attachment: fixed;
+            margin: 0; padding: 12px; overscroll-behavior-y: none;
+            display: flex; justify-content: center; touch-action: manipulation;
+            -webkit-user-select: none; user-select: none;
+        }
+        /* Paper-flat: the page background is the surface. No card, no box —
+           panels only carry layout. */
+        .container {
+            display: flex; gap: 24px; background: transparent; padding: 4px; border-radius: 0;
+            box-shadow: none; flex-wrap: wrap; max-width: 100%; box-sizing: border-box;
+        }
+        .left-pane, .right-pane { flex: 1 1 100%; max-width: 650px; display: flex; flex-direction: column; gap: 12px; margin: 0 auto; }
+        .right-pane { position: relative; min-height: 0; }
+        .board-container { position: relative; width: 100%; display: flex; justify-content: center; }
+        .canvas-stack { position: relative; display: inline-block; }
+        /* The board is the one floating object: a soft drop shadow lifts it off
+           the paper. Dimmed slightly in dark mode via --board-dim. */
+        #bgCanvas {
+            background-color: transparent; border-radius: 8px;
+            box-shadow: 0 16px 40px var(--shadow-color);
+            filter: var(--board-dim);
+            display: block; max-width: 100%; height: auto !important;
+        }
+        #boardCanvas {
+            position: absolute; inset: 0; width: 100%; height: 100%;
+            cursor: pointer; touch-action: none; border-radius: 8px; outline: none;
+            filter: var(--board-dim);
+            -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+        }
+        #boardCanvas:focus, #boardCanvas:focus-visible { outline: none; }
+        canvas, button, svg {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-user-drag: none;
+        }
+        .board-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; width: 100%; box-sizing: border-box; max-width: 620px; margin: 0 auto; align-items: center; }
+        .visually-hidden-file-input {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+        }
+        .ctrl-left, .ctrl-center, .ctrl-right { display: flex; align-items: center; }
+        .ctrl-left, .ctrl-right { gap: 6px; }
+        /* Arrows sit edge-to-edge; hairlines (not gaps) separate them. */
+        .ctrl-center { gap: 0; justify-content: center; min-width: 0; }
+        .control-menu { position: relative; }
+        /* Hairlines fencing the menus off from the arrow group. */
+        .ctrl-left::after,
+        .ctrl-right::before {
+            content: ""; width: 1px; align-self: stretch; margin: 12px 0;
+            background: var(--hairline);
+        }
+        /* Flat buttons: no box, a soft tint on hover/press. */
+        .board-controls button, .label-form-btn {
+            padding: 12px 14px; border: 0; background: transparent;
+            border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: bold; touch-action: manipulation;
+            white-space: nowrap; color: var(--text); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+            transition: background 0.16s ease, transform 0.16s ease;
+        }
+        @media (hover: hover) {
+            .board-controls button:hover, .label-form-btn:hover { background: var(--tint-hover); }
+        }
+        .board-controls button:active, .label-form-btn:active { background: var(--tint-active); transform: scale(0.96); }
+        .menu-icon-btn {
+            width: 52px; height: 50px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+            color: var(--muted);
+        }
+        /* Menu buttons run right up to their hairline; padding keeps the icon put. */
+        .ctrl-left .menu-icon-btn { width: 56px; justify-content: flex-start; padding-left: 12px; }
+        .ctrl-right .menu-icon-btn { width: 56px; justify-content: flex-end; padding-right: 12px; }
+        @media (hover: hover) { .menu-icon-btn:hover { color: var(--text); } }
+        .menu-icon-btn.active { background: var(--accent-soft); color: var(--accent-strong); }
+        .control-icon { display: inline-flex; width: 22px; height: 22px; }
+        .control-icon svg { width: 100%; height: 100%; fill: currentColor; }
+        .control-menu-popup {
+            position: absolute; bottom: calc(100% + 8px); min-width: 148px; display: flex; flex-direction: column; gap: 0;
+            padding: 5px; border: 1px solid var(--line); border-radius: 14px; background: var(--overlay);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 14px 32px var(--shadow-color); z-index: 20;
+        }
+        @media (prefers-reduced-motion: no-preference) {
+            .control-menu-popup {
+                transform-origin: bottom center;
+                animation: menu-pop 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+            }
+            @keyframes menu-pop { from { opacity: 0; transform: translateY(5px) scale(0.97); } }
+        }
+        .control-menu-popup[hidden] { display: none; }
+        .control-menu.align-right .control-menu-popup { right: 0; }
+        .control-menu:not(.align-right) .control-menu-popup { left: 0; }
+        .board-controls .control-menu-item {
+            width: 100%; text-align: left; padding: 12px 14px; font-size: 13px; font-weight: 600;
+            appearance: none; -webkit-appearance: none;
+            color: var(--text); background: transparent; border: none; box-shadow: none; border-radius: 10px; outline: none;
+            display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        }
+        .board-controls .control-menu-item[hidden] { display: none !important; }
+        @media (hover: hover) { .board-controls .control-menu-item:hover { background: var(--tint-hover); } }
+        .board-controls .control-menu-item:active { background: var(--tint-active); }
+        .board-controls .control-menu-item:focus,
+        .board-controls .control-menu-item:focus-visible { outline: none; }
+        .board-controls .control-menu-item::after { content: ''; width: 1em; flex: 0 0 1em; }
+        .board-controls .control-menu-item.active::after { content: '✓'; color: var(--muted); }
+        .board-controls .control-menu-item.board-theme-item::after,
+        .board-controls .control-menu-item.color-scheme-item::after,
+        .board-controls .control-menu-item.language-item::after { content: attr(data-value); width: auto; flex: 0 0 auto; color: var(--muted); }
+        .nav-btn {
+            padding: 0; display: inline-flex; align-items: center; justify-content: center;
+            text-align: center; line-height: 1; height: 50px; position: relative;
+        }
+        /* Hairline between adjacent arrows, vertically inset. */
+        .ctrl-center .nav-btn:not(:last-child)::after {
+            content: ""; position: absolute; right: 0; top: 25%; bottom: 25%; width: 1px;
+            background: var(--hairline);
+        }
+        .nav-btn.branch { width: 3.8em; letter-spacing: -0.08em; }
+        .nav-btn.step { width: 4.9em; }
+        /* Comment: the review core. Borderless soft-fill that reads as part of
+           the paper; a quiet ring appears on focus. */
+        textarea {
+            width: 100%; flex-grow: 1; min-height: 150px; resize: none; overflow-y: auto; touch-action: pan-y; padding: 14px 16px; font-size: 16px;
+            border: 0; border-radius: 16px; box-sizing: border-box; outline: none;
+            background-color: var(--fill-soft); color: var(--text); line-height: 1.6;
+            transition: background-color 0.16s ease, box-shadow 0.16s ease;
+        }
+        input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"] {
+            -webkit-user-select: text;
+            user-select: text;
+            -webkit-touch-callout: default;
+        }
+        body:not(.touch-main) textarea:focus,
+        body:not(.touch-main) textarea:focus-visible {
+            /* Keep the resting background — only add a ring — so focusing does
+               not flip the field to a near-white panel. */
+            box-shadow: inset 0 0 0 1px var(--focus-ring);
+        }
+        .hidden-hint { color: transparent !important; caret-color: transparent !important; }
+        .hidden-hint::placeholder { color: transparent !important; }
+        .guide { font-size: 13px; color: var(--muted); line-height: 1.6; background: transparent; padding: 4px 6px; border-radius: 0; border: 0; }
+        .guide b { color: var(--text); font-weight: 700; }
+        .tab-panel { display: none; flex: 1 1 0; min-height: 0; padding-bottom: 0; }
+        .tab-panel.active { display: flex; flex-direction: column; }
+        .comment-panel textarea { height: 100%; min-height: 0; }
+        body.touch-main .container { flex-wrap: wrap; }
+        body.touch-main .guide { display: none; }
+        body.bottom-controls-layout .board-controls {
+            position: fixed; left: 50%; bottom: var(--bottom-controls-offset); transform: translateX(-50%);
+            width: min(620px, calc(100vw - 16px)); margin: 0; padding: 6px 8px; border-radius: 16px;
+            background: var(--panel); backdrop-filter: blur(10px); box-shadow: 0 8px 24px var(--shadow-color); z-index: 30;
+        }
+        body.bottom-controls-layout.control-menu-open .board-controls { z-index: 40; }
+        body.bottom-controls-layout .right-pane {
+            padding-bottom: var(--bottom-controls-space);
+        }
+        body.bottom-controls-layout .comment-panel textarea {
+            padding-bottom: 10px;
+        }
+        @media (max-width: 599px) {
+            body { --bottom-controls-height: 58px; }
+            .board-controls { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 6px; }
+            .ctrl-left, .ctrl-right { gap: 0; }
+            .ctrl-center { gap: 4px; }
+            .menu-icon-btn { width: 44px; height: 42px; }
+            /* Fit the menu buttons to the 44px grid cells so the right (eye)
+               icon doesn't overflow into the bar's edge. File icon is
+               left-anchored so its position is unchanged. */
+            .ctrl-left .menu-icon-btn, .ctrl-right .menu-icon-btn { width: 44px; }
+            .control-icon { width: 20px; height: 20px; }
+            .nav-btn { height: 42px; }
+            .nav-btn.branch { width: 3em; }
+            .nav-btn.step { width: 4.5em; }
+        }
+        @media (min-width: 600px) and (max-width: 1199px) {
+            .ctrl-center { gap: 6px; }
+            .nav-btn.branch { width: 3.6em; }
+            .nav-btn.step { width: 5.1em; }
+        }
+        @media (max-width: 1199px) {
+            html, body { height: 100%; overflow: hidden; }
+            body { padding: 0; }
+            .container { padding: 0; border-radius: 0; box-shadow: none; gap: 5px; width: 100%; height: 100%; flex-direction: column; flex-wrap: nowrap; overflow: hidden; }
+            .board-container { padding-top: 10px; }
+            .left-pane { flex: 0 0 auto; }
+            .right-pane { flex: 1 1 0; min-height: 0; overflow: hidden; margin: 0 auto; width: 100%; max-width: 620px; padding: 0 0 10px; box-sizing: border-box; }
+            .guide { display: none; }
+            textarea { height: 100%; min-height: 0; margin: 0; width: 100%; line-height: 1.45; }
+        }
+        @media (min-width: 1200px) {
+            /* Center the composition in the window (like playren). min-height
+               keeps it vertically centered when it fits, and lets the page grow
+               and scroll normally if the viewport is shorter than the content. */
+            body { align-items: center; min-height: 100vh; min-height: 100dvh; box-sizing: border-box; }
+            .container { flex-wrap: nowrap; }
+            .left-pane { width: 620px; flex: 0 0 auto; }
+            .right-pane { width: 416px; flex: 0 0 auto; }
+            textarea { min-height: 300px; line-height: 1.6; }
+        }
+
+        /* Quiet scrollbars, desktop only: invisible at rest, a hairline thumb
+           while the pointer is over the list. Touch devices keep native bars. */
+        @media (hover: hover) and (pointer: fine) {
+            textarea, .label-tree {
+                scrollbar-width: thin;
+                scrollbar-color: transparent transparent;
+            }
+            textarea:hover, textarea:focus, .label-tree:hover {
+                scrollbar-color: var(--line) transparent;
+            }
+            textarea::-webkit-scrollbar,
+            .label-tree::-webkit-scrollbar { width: 6px; }
+            textarea::-webkit-scrollbar-track,
+            .label-tree::-webkit-scrollbar-track { background: transparent; }
+            textarea::-webkit-scrollbar-thumb,
+            .label-tree::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+            textarea:hover::-webkit-scrollbar-thumb,
+            textarea:focus::-webkit-scrollbar-thumb,
+            .label-tree:hover::-webkit-scrollbar-thumb { background: var(--line); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="left-pane">
+        <div class="board-container"><div class="canvas-stack"><canvas id="bgCanvas"></canvas><canvas id="boardCanvas"></canvas></div></div>
+        <div class="board-controls">
+            <div class="ctrl-left">
+                <div class="control-menu">
+                    <button id="fileMenuBtn" class="menu-icon-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="ファイル操作" onclick="toggleControlMenu('file')">
+                        <span class="control-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zm0 2.5L17.5 8H14zM8 12h8v1.5H8zm0 3h8v1.5H8zm0-6h4v1.5H8z"/></svg>
+                        </span>
+                    </button>
+                    <div id="fileMenu" class="control-menu-popup" hidden>
+                        <button id="fileOpenActionBtn" class="control-menu-item" type="button" onclick="openFileFromMenu()">読込</button>
+                        <button id="fileRenjuPortalActionBtn" class="control-menu-item" type="button" onclick="copyRenjuPortalLinkFromMenu()">RenjuPortal</button>
+                    </div>
+                </div>
+            </div>
+            <div class="ctrl-center">
+                <button class="nav-btn branch" type="button" onclick="goToPrevBranch()">&lt;&lt;</button>
+                <button class="nav-btn step" type="button" onclick="goBack()">&lt;</button>
+                <button class="nav-btn step" type="button" onclick="goNext()">&gt;</button>
+                <button class="nav-btn branch" type="button" onclick="goToNextBranch()">&gt;&gt;</button>
+            </div>
+            <div class="ctrl-right">
+                <div class="control-menu align-right">
+                    <button id="viewMenuBtn" class="menu-icon-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="表示操作" onclick="toggleControlMenu('view')">
+                        <span class="control-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 5c5.27 0 9.4 4.18 10.58 6.5C21.4 13.82 17.27 18 12 18S2.6 13.82 1.42 11.5C2.6 9.18 6.73 5 12 5m0-2C5.73 3 1 8.5 1 11.5S5.73 20 12 20s11-5.5 11-8.5S18.27 3 12 3m0 4.5A4.5 4.5 0 1 0 16.5 12 4.5 4.5 0 0 0 12 7.5m0 2A2.5 2.5 0 1 1 9.5 12 2.5 2.5 0 0 1 12 9.5"/></svg>
+                        </span>
+                    </button>
+                    <div id="viewMenu" class="control-menu-popup" hidden>
+                        <button id="languageActionBtn" class="control-menu-item language-item" type="button" onclick="cycleLanguageFromMenu()" data-value="日">言語</button>
+                        <button id="colorSchemeActionBtn" class="control-menu-item color-scheme-item" type="button" onclick="cycleColorSchemeFromMenu()" data-value="自動">配色</button>
+                        <button id="toggleCoordsActionBtn" class="control-menu-item" type="button" onclick="toggleCoordsFromMenu()">座標</button>
+                        <button id="cycleBoardThemeActionBtn" class="control-menu-item board-theme-item" type="button" onclick="cycleBoardThemeFromMenu()" data-value="茶系">盤面色</button>
+                        <button id="toggleMoveNumbersActionBtn" class="control-menu-item" type="button" onclick="toggleMoveNumbersFromMenu()">手数</button>
+                        <button id="toggleStoneShadingActionBtn" class="control-menu-item" type="button" onclick="toggleStoneShadingFromMenu()">石の陰影</button>
+                        <button id="toggleHintsActionBtn" class="control-menu-item" type="button" onclick="toggleHintsFromMenu()">記号等</button>
+                    </div>
+                </div>
+            </div>
+            <input type="file" id="fileInput" class="visually-hidden-file-input" accept=".lib,.gz" tabindex="-1" aria-hidden="true">
+        </div>
+    </div>
+    <div class="right-pane">
+        <div id="guideText" class="guide">
+            ・<b>Ctrl+O</b> で .lib を読込 / <b>Ctrl+F</b> で記号等表示切替<br>
+            ・<b>←→</b> で進退 / <b>↑↓</b> で分岐移動 / 盤クリックで着手選択
+        </div>
+        <div id="commentPanel" class="tab-panel comment-panel active">
+            <textarea id="commentArea"></textarea>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const BOARD_SIZE = 15;
+    let CELL_SIZE = 40, MARGIN_L = 35, MARGIN_R = 25, MARGIN_T = 25, MARGIN_B = 35;
+    if (window.innerWidth <= 599) {
+        MARGIN_T += 5;
+    }
+    const LOGICAL_W = 620, LOGICAL_H = 620;
+    const canvas = document.getElementById('boardCanvas');
+    canvas.tabIndex = 0;
+    const ctx = canvas.getContext('2d');
+    const bgCanvas = document.getElementById('bgCanvas');
+    const bgCtx = bgCanvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const container = document.querySelector('.container');
+    const commentArea = document.getElementById('commentArea');
+    const leftPane = document.querySelector('.left-pane');
+    const rightPane = document.querySelector('.right-pane');
+    const boardControls = document.querySelector('.board-controls');
+    const fileMenuBtn = document.getElementById('fileMenuBtn');
+    const fileMenu = document.getElementById('fileMenu');
+    const languageActionBtn = document.getElementById('languageActionBtn');
+    const fileRenjuPortalActionBtn = document.getElementById('fileRenjuPortalActionBtn');
+    const fileOpenActionBtn = document.getElementById('fileOpenActionBtn');
+    const viewMenuBtn = document.getElementById('viewMenuBtn');
+    const viewMenu = document.getElementById('viewMenu');
+    const cycleBoardThemeActionBtn = document.getElementById('cycleBoardThemeActionBtn');
+    const colorSchemeActionBtn = document.getElementById('colorSchemeActionBtn');
+    const toggleHintsActionBtn = document.getElementById('toggleHintsActionBtn');
+    const toggleCoordsActionBtn = document.getElementById('toggleCoordsActionBtn');
+    const toggleMoveNumbersActionBtn = document.getElementById('toggleMoveNumbersActionBtn');
+    const toggleStoneShadingActionBtn = document.getElementById('toggleStoneShadingActionBtn');
+    const guideText = document.getElementById('guideText');
+    const commentPanel = document.getElementById('commentPanel');
+    const fileInput = document.getElementById('fileInput');
+    const boardControlsAnchor = document.createComment('board-controls-anchor');
+    leftPane.insertBefore(boardControlsAnchor, boardControls);
+
+    let tree = {}, currentNodeId = 'r';
+    let showHints = true, showCoords = true, showMoveNumbers = true;
+    let stoneShadingEnabled = false;
+    // Palette principle (from playren): the board is always a step darker than
+    // the white stone (~#f7f4ee), the gradient span is narrow so stones read the
+    // same everywhere, and every theme leans warm.
+    const boardThemes = [
+        { label: '薄茶', grad1: '#eaca8b', grad2: '#dcbe79' },
+        { label: '茶', grad1: '#e0c185', grad2: '#c29457' },
+        { label: '緑', grad1: '#b9d2af', grad2: '#94b88c' },
+        { label: '紫', grad1: '#cdbcdc', grad2: '#a98bbd' },
+        { label: '灰', grad1: '#d9d3c7', grad2: '#b6ad9e' },
+        { label: '白', grad1: '#f0e9da', grad2: '#d9cfba' },
+    ];
+    const translations = {
+        ja: {
+            title: '連珠 ライブラリビューア',
+            fileMenuAria: 'ファイル操作',
+            viewMenuAria: '表示操作',
+            language: '言語',
+            languageShort: '日',
+            renjuPortal: 'RenjuPortal',
+            renjuPortalCopied: 'RenjuPortal のリンクをコピーしました',
+            open: '読込',
+            coords: '座標',
+            boardTheme: '盤面色',
+            colorScheme: '配色',
+            colorSchemeGray: 'グレー',
+            colorSchemeLight: 'ライト',
+            colorSchemeDark: 'ダーク',
+            moveNumbers: '手数',
+            stoneShading: '石の陰影',
+            hints: '記号等',
+            guideHtml: '・<b>Ctrl+O</b> で .lib を読込 / <b>Ctrl+F</b> で記号等表示切替<br>・<b>←→</b> で進退 / <b>↑↓</b> で分岐移動 / 盤クリックで着手選択',
+            commentPlaceholder: '...',
+            loadFailed: '読込失敗（RenLib の .lib ファイルを指定してください）',
+            gzipUnsupported: 'このブラウザは .gz の読込に対応していません。新しめのブラウザで開いてください。',
+            dropFile: '.lib ファイルをドロップしてください',
+        },
+        zh: {
+            title: '连珠 棋库阅览',
+            fileMenuAria: '文件操作',
+            viewMenuAria: '显示操作',
+            language: '语言',
+            languageShort: '中',
+            renjuPortal: 'RenjuPortal',
+            renjuPortalCopied: '已复制 RenjuPortal 链接',
+            open: '读取',
+            coords: '坐标',
+            boardTheme: '棋盘色',
+            colorScheme: '配色',
+            colorSchemeGray: '灰色',
+            colorSchemeLight: '浅色',
+            colorSchemeDark: '深色',
+            moveNumbers: '手数',
+            stoneShading: '棋子阴影',
+            hints: '符号等',
+            guideHtml: '・按 <b>Ctrl+O</b> 读取 .lib / 按 <b>Ctrl+F</b> 切换符号显示<br>・<b>←→</b> 前进后退 / <b>↑↓</b> 切换分支 / 点击棋盘选择着法',
+            commentPlaceholder: '...',
+            loadFailed: '读取失败（请选择 RenLib 的 .lib 文件）',
+            gzipUnsupported: '此浏览器不支持读取 .gz 文件，请使用较新的浏览器。',
+            dropFile: '请拖入 .lib 文件',
+        },
+    };
+    let boardThemeIndex = 0;
+    let currentLanguage = 'ja';
+    let colorSchemePreference = 'light';
+    const COLOR_SCHEME_ORDER = ['light', 'gray', 'dark'];
+    const THEME_META_COLORS = { light: '#f3efe6', gray: '#2a241d', dark: '#1a1613' };
+
+    function applyColorScheme() {
+        document.documentElement.dataset.theme = colorSchemePreference;
+        document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+            meta.content = THEME_META_COLORS[colorSchemePreference] || THEME_META_COLORS.light;
+        });
+    }
+
+    function colorSchemeLabel() {
+        const text = getCurrentTranslation();
+        return colorSchemePreference === 'gray' ? text.colorSchemeGray
+            : (colorSchemePreference === 'dark' ? text.colorSchemeDark : text.colorSchemeLight);
+    }
+
+    function cycleColorScheme() {
+        const i = COLOR_SCHEME_ORDER.indexOf(colorSchemePreference);
+        colorSchemePreference = COLOR_SCHEME_ORDER[(i + 1) % COLOR_SCHEME_ORDER.length];
+        applyColorScheme();
+        updateViewMenuButtons();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    function cycleColorSchemeFromMenu() {
+        cycleColorScheme();
+    }
+
+    let currentOpenControlMenu = null;
+    const SETTINGS_LOCAL_STORAGE_KEY = 'showren-lib-settings';
+
+    function setupCanvas() {
+        bgCanvas.width = LOGICAL_W * dpr; bgCanvas.height = LOGICAL_H * dpr;
+        bgCanvas.style.width = LOGICAL_W + 'px'; bgCanvas.style.height = LOGICAL_H + 'px';
+        bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        canvas.width = LOGICAL_W * dpr; canvas.height = LOGICAL_H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        applyBoardTheme();
+        drawBoard();
+    }
+
+    function initGame() {
+        tree = { 'r': { i: 'r', p: null, c: [], x: null, y: null, o: 0, m: 0, cm: '', tx: '' } };
+        currentNodeId = 'r';
+        setupCanvas();
+        updateUI();
+    }
+
+    function updateUI() {
+        ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
+        commentArea.value = tree[currentNodeId].cm || '';
+        drawStonesAndMarks();
+    }
+
+    function buildAppSettings() {
+        return {
+            language: currentLanguage,
+            boardThemeIndex,
+            colorScheme: colorSchemePreference,
+            showHints,
+            showCoords,
+            showMoveNumbers,
+            stoneShading: stoneShadingEnabled,
+        };
+    }
+
+    function saveAppSettingsToLocalStorage(settings) {
+        try {
+            window.localStorage.setItem(SETTINGS_LOCAL_STORAGE_KEY, JSON.stringify(settings));
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function restoreAppSettingsFromLocalStorage() {
+        try {
+            const raw = window.localStorage.getItem(SETTINGS_LOCAL_STORAGE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function normalizeAppSettings(settings) {
+        if (!settings || typeof settings !== 'object') return null;
+
+        const normalized = {
+            language: settings.language === 'zh' ? 'zh' : 'ja',
+            boardThemeIndex: Number.isInteger(settings.boardThemeIndex) ? settings.boardThemeIndex : 0,
+            colorScheme: ['light', 'gray', 'dark'].includes(settings.colorScheme) ? settings.colorScheme : 'light',
+            showHints: typeof settings.showHints === 'boolean' ? settings.showHints : true,
+            showCoords: typeof settings.showCoords === 'boolean' ? settings.showCoords : true,
+            showMoveNumbers: typeof settings.showMoveNumbers === 'boolean' ? settings.showMoveNumbers : true,
+            stoneShading: typeof settings.stoneShading === 'boolean' ? settings.stoneShading : false,
+        };
+        if (boardThemes.length > 0) {
+            normalized.boardThemeIndex = ((normalized.boardThemeIndex % boardThemes.length) + boardThemes.length) % boardThemes.length;
+        }
+        return normalized;
+    }
+
+    function applyAppSettings(settings) {
+        const normalized = normalizeAppSettings(settings);
+        if (!normalized) return;
+
+        currentLanguage = normalized.language;
+        boardThemeIndex = normalized.boardThemeIndex;
+        colorSchemePreference = normalized.colorScheme;
+        showHints = normalized.showHints;
+        showCoords = normalized.showCoords;
+        showMoveNumbers = normalized.showMoveNumbers;
+        stoneShadingEnabled = normalized.stoneShading;
+        applyColorScheme();
+
+        if (showCoords) {
+            CELL_SIZE = 40; MARGIN_L = 35; MARGIN_R = 25; MARGIN_T = 25; MARGIN_B = 35;
+        } else {
+            CELL_SIZE = (620-40)/14; MARGIN_L = MARGIN_R = MARGIN_T = MARGIN_B = 20;
+        }
+        if (window.innerWidth <= 599) {
+            MARGIN_T += 5;
+        }
+
+        commentArea.classList.toggle('hidden-hint', !showHints);
+        applyLanguage();
+        applyBoardTheme();
+        drawBoard();
+        if (tree.r) updateUI();
+    }
+
+    function suppressLongPressMenu(event) {
+        event.preventDefault();
+    }
+
+    function allowsNativeContextMenu(target) {
+        return !!target.closest('input, textarea, [contenteditable="true"], [contenteditable="plaintext-only"]');
+    }
+
+    function shouldBlockSelection(target) {
+        return !allowsNativeContextMenu(target);
+    }
+
+    function drawBoard() {
+        bgCtx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
+
+        // Wood gradient fills the board itself (the one bright object).
+        const theme = boardThemes[boardThemeIndex];
+        const grad = bgCtx.createLinearGradient(0, 0, LOGICAL_W, LOGICAL_H);
+        grad.addColorStop(0, theme.grad1);
+        grad.addColorStop(1, theme.grad2);
+        bgCtx.fillStyle = grad;
+        bgCtx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+        // Faint rim so pale themes (灰/白) keep an edge against the paper.
+        bgCtx.strokeStyle = 'rgba(74, 54, 34, 0.16)';
+        bgCtx.lineWidth = 1;
+        bgCtx.strokeRect(0.5, 0.5, LOGICAL_W - 1, LOGICAL_H - 1);
+
+        const gridEnd = MARGIN_L + (BOARD_SIZE - 1) * CELL_SIZE;
+        bgCtx.beginPath(); bgCtx.strokeStyle = 'rgba(63, 42, 19, 0.9)'; bgCtx.lineWidth = 1;
+        for (let i = 0; i < BOARD_SIZE; i++) {
+            bgCtx.moveTo(MARGIN_L + i * CELL_SIZE, MARGIN_T);
+            bgCtx.lineTo(MARGIN_L + i * CELL_SIZE, MARGIN_T + (BOARD_SIZE - 1) * CELL_SIZE);
+            bgCtx.moveTo(MARGIN_L, MARGIN_T + i * CELL_SIZE);
+            bgCtx.lineTo(gridEnd, MARGIN_T + i * CELL_SIZE);
+        }
+        bgCtx.stroke();
+        // Slightly thicker outer frame (traditional board look).
+        bgCtx.lineWidth = 1.5;
+        bgCtx.strokeRect(MARGIN_L, MARGIN_T, (BOARD_SIZE - 1) * CELL_SIZE, (BOARD_SIZE - 1) * CELL_SIZE);
+
+        const stars = [[3,3], [11,3], [7,7], [3,11], [11,11]];
+        bgCtx.fillStyle = 'rgba(51, 33, 17, 0.82)';
+        for (let [x, y] of stars) { bgCtx.beginPath(); bgCtx.arc(MARGIN_L + x * CELL_SIZE, MARGIN_T + y * CELL_SIZE, 3, 0, Math.PI * 2); bgCtx.fill(); }
+        if (showCoords) {
+            bgCtx.fillStyle = 'rgba(63, 42, 19, 0.82)'; bgCtx.font = '14px Arial'; bgCtx.textAlign = 'center'; bgCtx.textBaseline = 'middle';
+            for (let i = 0; i < BOARD_SIZE; i++) {
+                bgCtx.fillText(String.fromCharCode(65 + i), MARGIN_L + i * CELL_SIZE, LOGICAL_H - 15);
+                bgCtx.fillText((BOARD_SIZE - i).toString(), 15, MARGIN_T + i * CELL_SIZE);
+            }
+        }
+    }
+
+    function applyBoardTheme() {
+        drawBoard();
+        updateViewMenuButtons();
+    }
+
+    // Soft glass-bead stone: a top-left highlight rolling off into a darker
+    // rim (shading ON). Flat disc when shading OFF (from playren).
+    function createStoneFill(x, y, r, isBlack) {
+        if (!stoneShadingEnabled) return isBlack ? '#20201e' : '#f7f4ee';
+        const g = ctx.createRadialGradient(x - r * 0.36, y - r * 0.42, r * 0.06, x, y, r * 1.04);
+        if (isBlack) {
+            g.addColorStop(0, '#4e4941');
+            g.addColorStop(0.35, '#312e29');
+            g.addColorStop(0.75, '#201d19');
+            g.addColorStop(1, '#14110d');
+        } else {
+            g.addColorStop(0, '#ffffff');
+            g.addColorStop(0.45, '#faf6ec');
+            g.addColorStop(0.85, '#eee4d0');
+            g.addColorStop(1, '#dccfb6');
+        }
+        return g;
+    }
+
+    function drawStoneBody(x, y, r, isBlack) {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = createStoneFill(x, y, r, isBlack);
+
+        if (!stoneShadingEnabled) {
+            // Flat disc with a thin hard ring (the original look).
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#333';
+            ctx.stroke();
+            return;
+        }
+
+        ctx.save();
+        // Canvas shadow units ignore the CTM, so scale by dpr to stay proportional.
+        ctx.shadowColor = 'rgba(38, 24, 10, 0.32)';
+        ctx.shadowBlur = r * 0.42 * dpr;
+        ctx.shadowOffsetY = r * 0.15 * dpr;
+        ctx.fill();
+        ctx.restore();
+        // Hairline rim instead of a hard outline.
+        ctx.beginPath();
+        ctx.arc(x, y, r - 0.25, 0, Math.PI * 2);
+        ctx.lineWidth = Math.max(0.5, r * 0.03);
+        ctx.strokeStyle = isBlack ? 'rgba(0, 0, 0, 0.2)' : 'rgba(74, 54, 34, 0.28)';
+        ctx.stroke();
+    }
+
+    function drawStonesAndMarks() {
+        let path = []; let curr = tree[currentNodeId];
+        while (curr && curr.i !== 'r') { path.unshift(curr); curr = tree[curr.p]; }
+        for (let node of path) {
+            let sx = MARGIN_L + node.x * CELL_SIZE, sy = MARGIN_T + node.y * CELL_SIZE;
+            const isBlack = node.o === 1;
+            drawStoneBody(sx, sy, CELL_SIZE * 0.45, isBlack);
+            if (showMoveNumbers) {
+                const moveText = node.m.toString();
+                const moveTextY = sy + Math.max(1, Math.round(CELL_SIZE * 0.03));
+                // Scale down for 2-/3-digit numbers so high move counts fit the
+                // stone instead of overflowing (matches playren).
+                const textLen = moveText.length;
+                // On narrow (phone) widths the board is shown small, so a bold
+                // weight + thick halo reads as too loud and competes with the
+                // stone pattern. There, use a medium weight, ~90% size and a
+                // thinner halo; keep PC as-is.
+                const narrow = window.innerWidth <= 599;
+                const baseRatio = narrow
+                    ? (textLen >= 3 ? 0.27 : (textLen === 2 ? 0.34 : 0.37))
+                    : (textLen >= 3 ? 0.3 : (textLen === 2 ? 0.38 : 0.41));
+                const fontSize = Math.max(10, Math.floor(CELL_SIZE * baseRatio));
+                ctx.font = `${narrow ? 500 : 600} ${fontSize}px 'Segoe UI', 'Yu Gothic UI', Meiryo, sans-serif`;
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                if (stoneShadingEnabled) {
+                    // Translucent, ink-like numeral: no halo, so the stone's
+                    // sheen shows through and it reads as printed on the stone.
+                    ctx.fillStyle = isBlack ? 'rgba(244, 238, 228, 0.85)' : 'rgba(66, 51, 34, 0.8)';
+                    ctx.fillText(moveText, sx, moveTextY);
+                } else {
+                    // Flat stones: haloed numeral for crisp contrast.
+                    ctx.fillStyle = isBlack ? '#eee' : '#333';
+                    ctx.lineWidth = narrow ? 1.5 : 2.5;
+                    ctx.strokeStyle = isBlack
+                        ? (narrow ? 'rgba(0, 0, 0, 0.4)' : 'rgba(0, 0, 0, 0.55)')
+                        : (narrow ? 'rgba(255, 255, 255, 0.72)' : 'rgba(255, 255, 255, 0.9)');
+                    ctx.strokeText(moveText, sx, moveTextY);
+                    ctx.fillText(moveText, sx, moveTextY);
+                }
+            }
+        }
+
+        // 候補手 = 現在ノードの子。盤上テキストがあれば文字、なければ点で示す。
+        if (showHints) {
+            for (const cid of tree[currentNodeId].c) {
+                const child = tree[cid];
+                const sx = MARGIN_L + child.x * CELL_SIZE, sy = MARGIN_T + child.y * CELL_SIZE;
+                if (child.tx) {
+                    const size = Math.floor(CELL_SIZE * (child.tx.length >= 3 ? 0.34 : (child.tx.length === 2 ? 0.42 : 0.48)));
+                    ctx.font = `bold ${size}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'; ctx.lineWidth = 3.5; ctx.strokeText(child.tx, sx, sy);
+                    ctx.fillStyle = '#555'; ctx.fillText(child.tx, sx, sy);
+                } else {
+                    ctx.beginPath(); ctx.fillStyle = 'rgba(128, 128, 128, 0.8)';
+                    ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+                }
+            }
+        }
+    }
+
+    function isTouchMain() {
+        return window.matchMedia('(pointer: coarse)').matches
+            && window.matchMedia('(hover: none)').matches
+            && window.innerWidth <= 1199;
+    }
+
+    function restoreBoardControlsPosition() {
+        if (boardControlsAnchor.parentNode !== leftPane) leftPane.insertBefore(boardControlsAnchor, leftPane.firstChild);
+        if (boardControls.parentNode !== leftPane || boardControls.previousSibling !== boardControlsAnchor) {
+            leftPane.insertBefore(boardControls, boardControlsAnchor.nextSibling);
+        }
+    }
+
+    function getControlMenuElements(name) {
+        if (name === 'file') return { name, button: fileMenuBtn, menu: fileMenu };
+        if (name === 'view') return { name, button: viewMenuBtn, menu: viewMenu };
+        return null;
+    }
+
+    function closeControlMenus() {
+        for (const name of ['file', 'view']) {
+            const elements = getControlMenuElements(name);
+            elements.menu.hidden = true;
+            elements.button.classList.remove('active');
+            elements.button.setAttribute('aria-expanded', 'false');
+        }
+        currentOpenControlMenu = null;
+        document.body.classList.remove('control-menu-open');
+    }
+
+    function getCurrentTranslation() {
+        return translations[currentLanguage] || translations.ja;
+    }
+
+    function updateFileMenuButtons() {
+        const text = getCurrentTranslation();
+        fileRenjuPortalActionBtn.textContent = text.renjuPortal;
+        fileOpenActionBtn.textContent = text.open;
+    }
+
+    function applyLanguage() {
+        const text = getCurrentTranslation();
+        document.documentElement.lang = currentLanguage === 'zh' ? 'zh-CN' : 'ja';
+        document.title = text.title;
+        fileMenuBtn.setAttribute('aria-label', text.fileMenuAria);
+        viewMenuBtn.setAttribute('aria-label', text.viewMenuAria);
+        languageActionBtn.textContent = text.language;
+        languageActionBtn.dataset.value = text.languageShort;
+        updateFileMenuButtons();
+        guideText.innerHTML = text.guideHtml;
+        updateCommentEditable();
+    }
+
+    function toggleControlMenu(name) {
+        const elements = getControlMenuElements(name);
+        if (!elements) return;
+        const shouldOpen = currentOpenControlMenu !== name || elements.menu.hidden;
+        closeControlMenus();
+        if (!shouldOpen) return;
+        elements.menu.hidden = false;
+        elements.button.classList.add('active');
+        elements.button.setAttribute('aria-expanded', 'true');
+        currentOpenControlMenu = name;
+        document.body.classList.add('control-menu-open');
+    }
+
+    function updateViewMenuButtons() {
+        const text = getCurrentTranslation();
+        toggleCoordsActionBtn.textContent = text.coords;
+        cycleBoardThemeActionBtn.textContent = text.boardTheme;
+        cycleBoardThemeActionBtn.dataset.value = boardThemes[boardThemeIndex].label;
+        if (colorSchemeActionBtn) {
+            colorSchemeActionBtn.textContent = text.colorScheme;
+            colorSchemeActionBtn.dataset.value = colorSchemeLabel();
+        }
+        toggleMoveNumbersActionBtn.textContent = text.moveNumbers;
+        if (toggleStoneShadingActionBtn) toggleStoneShadingActionBtn.textContent = text.stoneShading;
+        toggleHintsActionBtn.textContent = text.hints;
+        toggleHintsActionBtn.classList.toggle('active', showHints);
+        toggleCoordsActionBtn.classList.toggle('active', showCoords);
+        toggleMoveNumbersActionBtn.classList.toggle('active', showMoveNumbers);
+        if (toggleStoneShadingActionBtn) toggleStoneShadingActionBtn.classList.toggle('active', stoneShadingEnabled);
+        cycleBoardThemeActionBtn.classList.remove('active');
+    }
+
+    function shouldShowBottomControls() {
+        return isTouchMain() || window.innerWidth <= 1199;
+    }
+
+    function updateTouchMainLayout() {
+        document.body.classList.toggle('bottom-controls-layout', shouldShowBottomControls());
+        if (shouldShowBottomControls()) {
+            if (boardControls.parentNode !== container || boardControls.previousSibling !== rightPane) {
+                container.insertBefore(boardControls, rightPane.nextSibling);
+            }
+        } else {
+            restoreBoardControlsPosition();
+        }
+    }
+
+    function updateCommentEditable() {
+        document.body.classList.toggle('touch-main', isTouchMain());
+        commentArea.readOnly = true;
+        commentArea.placeholder = isTouchMain() ? '' : getCurrentTranslation().commentPlaceholder;
+        updateTouchMainLayout();
+        updateFileMenuButtons();
+        updateViewMenuButtons();
+    }
+
+    applyLanguage();
+    window.matchMedia('(pointer: coarse)').addEventListener('change', updateCommentEditable);
+    window.matchMedia('(hover: none)').addEventListener('change', updateCommentEditable);
+    let lastNarrowWidth = window.innerWidth <= 599;
+    window.addEventListener('resize', () => {
+        updateTouchMainLayout();
+        closeControlMenus();
+        // The move-number style is sampled at draw time (weight/size/halo differ
+        // at <=599px), so redraw when the boundary is crossed — e.g. rotating a
+        // phone — instead of leaving stale numerals until the next navigation.
+        const narrow = window.innerWidth <= 599;
+        if (narrow !== lastNarrowWidth) {
+            lastNarrowWidth = narrow;
+            updateUI();
+        }
+    });
+
+    canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = LOGICAL_W / rect.width, scaleY = LOGICAL_H / rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX, mouseY = (e.clientY - rect.top) * scaleY;
+        const px = Math.round((mouseX - MARGIN_L) / CELL_SIZE), py = Math.round((mouseY - MARGIN_T) / CELL_SIZE);
+        if (px < 0 || px >= BOARD_SIZE || py < 0 || py >= BOARD_SIZE) return;
+
+        // 候補手をクリック → その手へ。経路上の石をクリック → その手まで戻る。
+        const node = tree[currentNodeId];
+        for (const cid of node.c) {
+            if (tree[cid].x === px && tree[cid].y === py) {
+                node.l = cid;
+                currentNodeId = cid;
+                updateUI();
+                return;
+            }
+        }
+        let temp = currentNodeId;
+        while (temp !== null) {
+            const n = tree[temp];
+            if (n.p !== null && n.x === px && n.y === py) {
+                currentNodeId = temp;
+                updateUI();
+                return;
+            }
+            temp = n.p;
+        }
+    });
+
+    function toggleHints() {
+        showHints = !showHints;
+        commentArea.classList.toggle('hidden-hint', !showHints);
+        updateUI();
+        updateCommentEditable();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    function toggleCoords() {
+        showCoords = !showCoords;
+        if (showCoords) {
+            CELL_SIZE = 40; MARGIN_L = 35; MARGIN_R = 25; MARGIN_T = 25; MARGIN_B = 35;
+        } else {
+            CELL_SIZE = (620-40)/14; MARGIN_L = MARGIN_R = MARGIN_T = MARGIN_B = 20;
+        }
+        drawBoard();
+        updateUI();
+        updateViewMenuButtons();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    function toggleMoveNumbers() {
+        showMoveNumbers = !showMoveNumbers;
+        updateUI();
+        updateViewMenuButtons();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    function toggleStoneShading() {
+        stoneShadingEnabled = !stoneShadingEnabled;
+        updateUI();
+        updateViewMenuButtons();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    function toggleStoneShadingFromMenu() {
+        toggleStoneShading();
+    }
+
+    function openFileFromMenu() {
+        closeControlMenus();
+        openFile();
+    }
+
+    function getCurrentMovePath() {
+        const path = [];
+        let curr = tree[currentNodeId];
+        while (curr && curr.i !== 'r') {
+            path.unshift(curr);
+            curr = tree[curr.p];
+        }
+        return path;
+    }
+
+    function encodeRenjuPortalMoveValue(value) {
+        if (!Number.isInteger(value) || value < 0 || value >= BOARD_SIZE) return '';
+        return value.toString(15);
+    }
+
+    function buildRenjuPortalLink() {
+        const moves = getCurrentMovePath().map((node) => (
+            encodeRenjuPortalMoveValue(node.x) + encodeRenjuPortalMoveValue(node.y)
+        )).join('');
+        return `https://renjuportal.com/board?v=3&typ=g&mde=e&mvs=${moves}`;
+    }
+
+    async function copyTextToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+    }
+
+    async function copyRenjuPortalLinkFromMenu() {
+        closeControlMenus();
+        await copyTextToClipboard(buildRenjuPortalLink());
+        showToast(getCurrentTranslation().renjuPortalCopied);
+    }
+
+    function cycleLanguage() {
+        currentLanguage = currentLanguage === 'ja' ? 'zh' : 'ja';
+        applyLanguage();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    // View-menu toggles/cycles keep the menu open (match playren), so several
+    // display tweaks can be made without reopening it each time.
+    function cycleLanguageFromMenu() {
+        cycleLanguage();
+    }
+
+    function toggleHintsFromMenu() {
+        toggleHints();
+    }
+
+    function toggleCoordsFromMenu() {
+        toggleCoords();
+    }
+
+    function cycleBoardTheme() {
+        boardThemeIndex = (boardThemeIndex + 1) % boardThemes.length;
+        applyBoardTheme();
+        saveAppSettingsToLocalStorage(buildAppSettings());
+    }
+
+    function cycleBoardThemeFromMenu() {
+        cycleBoardTheme();
+    }
+
+    function toggleMoveNumbersFromMenu() {
+        toggleMoveNumbers();
+    }
+
+    function getPreferredChildId(node) {
+        if (!node) return null;
+        const validChildren = node.c.filter((id) => tree[id]);
+        if (validChildren.length !== node.c.length) {
+            node.c = validChildren;
+        }
+
+        if (!validChildren.length) {
+            if (node.l && !tree[node.l]) node.l = null;
+            return null;
+        }
+
+        if (node.l && tree[node.l] && validChildren.includes(node.l)) {
+            return node.l;
+        }
+
+        node.l = validChildren[0];
+        return node.l;
+    }
+
+    function goBack() { if (tree[currentNodeId].p) { currentNodeId = tree[currentNodeId].p; updateUI(); } }
+    function goNext() {
+        let node = tree[currentNodeId], target = getPreferredChildId(node);
+        if (target) { currentNodeId = target; updateUI(); }
+    }
+    function goToPrevBranch() { let curr = tree[currentNodeId]; while (curr.p) { curr = tree[curr.p]; if (curr.c.length > 1 || curr.i === 'r') { currentNodeId = curr.i; updateUI(); return; } } }
+    function goToNextBranch() {
+        let curr = tree[currentNodeId], target = getPreferredChildId(curr);
+        while (target) {
+            curr = tree[target];
+            if (curr.c.length > 1 || curr.c.length === 0) { currentNodeId = curr.i; updateUI(); return; }
+            target = getPreferredChildId(curr);
+        }
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey) {
+            const key = e.key.toLowerCase();
+            if (key === 'o') { e.preventDefault(); openFile(); }
+            else if (key === 'f') { e.preventDefault(); toggleHints(); }
+            return;
+        }
+        switch (e.key) {
+            case 'h': e.preventDefault(); goToPrevBranch(); break;
+            case 'j': e.preventDefault(); goBack(); break;
+            case 'k': e.preventDefault(); goNext(); break;
+            case 'l': e.preventDefault(); goToNextBranch(); break;
+            case 'ArrowLeft': e.preventDefault(); goBack(); break;
+            case 'ArrowRight': e.preventDefault(); goNext(); break;
+            case 'ArrowUp': e.preventDefault(); goToPrevBranch(); break;
+            case 'ArrowDown': e.preventDefault(); goToNextBranch(); break;
+        }
+    });
+
+    let fileHandle = null;
+
+    function openFallbackFilePicker() {
+        fileInput.value = '';
+        if (typeof fileInput.showPicker === 'function') {
+            try {
+                fileInput.showPicker();
+                return;
+            } catch (error) {
+                // Fall back to click when showPicker is unavailable or blocked.
+            }
+        }
+        fileInput.focus({ preventScroll: true });
+        fileInput.click();
+    }
+
+    async function openFile() {
+        if (window.showOpenFilePicker) {
+            try {
+                const [handle] = await window.showOpenFilePicker({ types: [{ description: 'RenLib', accept: { 'application/octet-stream': ['.lib'], 'application/gzip': ['.gz'] } }] });
+                fileHandle = handle;
+                const file = await handle.getFile();
+                await loadFromFile(file);
+            } catch (e) {
+                if (e.name !== 'AbortError') alert(getCurrentTranslation().loadFailed);
+            }
+        } else {
+            openFallbackFilePicker();
+        }
+    }
+
+    // gzip（マジックバイト 1f 8b）なら解凍してから .lib として読む。
+    async function loadFromFile(file) {
+        try {
+            const buffer = await file.arrayBuffer();
+            let bytes = new Uint8Array(buffer);
+            if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+                if (typeof DecompressionStream !== 'function') {
+                    alert(getCurrentTranslation().gzipUnsupported);
+                    return;
+                }
+                const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
+                bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+            }
+            loadFromLibBytes(bytes);
+        } catch (e) {
+            alert(getCurrentTranslation().loadFailed);
+        }
+    }
+
+    // ---- RenLib (.lib) パーサ ------------------------------------------
+    // showren の script/lib_to_json.py と同じ仕様:
+    //   ヘッダ 20 バイト（FF 'RenLib' FF + バージョン + 予約）
+    //   以降 DFS 順に 1 手 = [座標 1B][フラグ 1B][(テキスト時パディング 2B)]
+    //                       [(コメント: NUL 終端 + 2B 境界揃え)][(テキスト: 同左)]
+    //   フラグ: 0x01=テキスト 0x08=コメント 0x40=子なし 0x80=兄弟あり
+
+    const LIB_MAGIC = [0xff, 0x52, 0x65, 0x6e, 0x4c, 0x69, 0x62, 0xff];
+
+    function readLibEntry(bytes, offset) {
+        if (offset + 1 >= bytes.length) return null;
+        const moveByte = bytes[offset];
+        const flag = bytes[offset + 1];
+        offset += 2;
+        const x = moveByte === 0 ? -1 : (moveByte & 0x0f) - 1;
+        const y = moveByte === 0 ? -1 : moveByte >> 4;
+        if (flag & 0x01) offset += 2; // テキストありのときのパディング
+
+        const readString = () => {
+            const start = offset;
+            let end = bytes.indexOf(0, offset);
+            if (end === -1) end = bytes.length;
+            const raw = bytes.subarray(start, end);
+            offset = Math.min(end + 1, bytes.length);
+            if ((raw.length + 1) % 2) offset = Math.min(offset + 1, bytes.length); // 2B 境界
+            return raw;
+        };
+        const comment = (flag & 0x08) ? readString() : null;
+        const text = (flag & 0x01) ? readString() : null;
+        return {
+            node: { x, y, comment, text, children: [] },
+            hasChild: !(flag & 0x40),
+            hasSibling: !!(flag & 0x80),
+            offset,
+        };
+    }
+
+    // DFS 直列化を復元し、仮想ルート（x=-1）を頂点とする中間木を返す。
+    function parseLibTree(bytes) {
+        if (bytes.length < 20 || !LIB_MAGIC.every((b, i) => bytes[i] === b)) return null;
+        let entry = readLibEntry(bytes, 20);
+        if (!entry) return null;
+        let root;
+        let { node, hasChild, hasSibling, offset } = entry;
+        if (node.x < 0) {
+            root = node; // 先頭が手なしノード＝ルート（コメントも保持）
+            if (!hasChild) return root;
+            entry = readLibEntry(bytes, offset);
+            if (!entry) return root;
+            ({ node, hasChild, hasSibling, offset } = entry);
+        } else {
+            root = { x: -1, y: -1, comment: null, text: null, children: [] };
+        }
+        root.children.push(node);
+
+        // 行き(stage 0)で子を読み、帰り(stage 1)で兄弟を読む明示スタック DFS。
+        const stack = [[node, root, 0, hasChild, hasSibling]];
+        while (stack.length) {
+            const frame = stack[stack.length - 1];
+            if (frame[2] === 0) {
+                frame[2] = 1;
+                if (frame[3]) {
+                    const child = readLibEntry(bytes, offset);
+                    if (child) {
+                        offset = child.offset;
+                        frame[0].children.push(child.node);
+                        stack.push([child.node, frame[0], 0, child.hasChild, child.hasSibling]);
+                    }
+                }
+            } else {
+                stack.pop();
+                if (frame[4]) {
+                    const sib = readLibEntry(bytes, offset);
+                    if (sib) {
+                        offset = sib.offset;
+                        frame[1].children.push(sib.node);
+                        stack.push([sib.node, frame[1], 0, sib.hasChild, sib.hasSibling]);
+                    }
+                }
+            }
+        }
+        return root;
+    }
+
+    // 全文字列を連結し、厳密デコードが通る最初の候補を返す。gb18030 は
+    // ほぼ全バイト列を受理してしまうため最後に置く（shift_jis は GBK の
+    // データで高確率で失敗するので先に試せる）。
+    function detectLibEncoding(root) {
+        const chunks = [];
+        const stack = [root];
+        while (stack.length) {
+            const n = stack.pop();
+            if (n.comment && n.comment.length) chunks.push(n.comment);
+            if (n.text && n.text.length) chunks.push(n.text);
+            for (const c of n.children) stack.push(c);
+        }
+        let total = 0;
+        for (const c of chunks) total += c.length + 1;
+        const blob = new Uint8Array(total);
+        let pos = 0;
+        for (const c of chunks) { blob.set(c, pos); pos += c.length; blob[pos++] = 10; }
+        for (const enc of ['utf-8', 'shift_jis', 'gb18030']) {
+            try {
+                new TextDecoder(enc, { fatal: true }).decode(blob);
+                return enc;
+            } catch (e) { /* 次の候補へ */ }
+        }
+        return 'gb18030';
+    }
+
+    // 中間木 → showren と同じ形のノード木。無効手（盤外・重複着手）は
+    // 木に載せず、その子を親へ繋ぎ替える。重複する兄弟は合流させる。
+    function loadFromLibBytes(bytes) {
+        const root = parseLibTree(bytes);
+        if (!root) {
+            alert(getCurrentTranslation().loadFailed);
+            return;
+        }
+        const decoder = new TextDecoder(detectLibEncoding(root));
+        const decode = (raw) => raw && raw.length
+            ? decoder.decode(raw).replace(/\r\n/g, '\n').trim()
+            : '';
+
+        const newTree = { 'r': { i: 'r', p: null, c: [], x: null, y: null, o: 0, m: 0, cm: decode(root.comment), tx: '' } };
+        const kids = { 'r': {} };
+        const grid = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+        let nextId = 1;
+
+        // フレーム: [中間ノード, showren親id, 子index, このフレームで置いたセル or -1]
+        const stack = [[root, 'r', 0, -1]];
+        while (stack.length) {
+            const frame = stack[stack.length - 1];
+            const libNode = frame[0], parentId = frame[1];
+            if (frame[2] >= libNode.children.length) {
+                stack.pop();
+                if (frame[3] >= 0) grid[frame[3]] = 0;
+                continue;
+            }
+            const child = libNode.children[frame[2]++];
+            const cell = (child.x >= 0 && child.x < BOARD_SIZE && child.y >= 0 && child.y < BOARD_SIZE)
+                ? child.x * BOARD_SIZE + child.y : -1;
+            if (cell < 0 || grid[cell]) {
+                stack.push([child, parentId, 0, -1]); // 無効手: 子を親へ繋ぎ替え
+                continue;
+            }
+            const parent = newTree[parentId];
+            const moveNo = parent.m + 1;
+            const color = moveNo % 2 === 1 ? 1 : 2;
+            let nodeId = kids[parentId][cell];
+            if (nodeId === undefined) {
+                nodeId = String(nextId++);
+                newTree[nodeId] = {
+                    i: nodeId, p: parentId, c: [],
+                    x: child.x, y: child.y, o: color, m: moveNo,
+                    cm: decode(child.comment), tx: decode(child.text),
+                };
+                parent.c.push(nodeId);
+                kids[parentId][cell] = nodeId;
+                kids[nodeId] = {};
+            } else {
+                // 合流: 既存ノードが空欄ならコメント/テキストを引き継ぐ（先勝ち）
+                const existing = newTree[nodeId];
+                if (!existing.cm) existing.cm = decode(child.comment);
+                if (!existing.tx) existing.tx = decode(child.text);
+            }
+            if (!('l' in parent)) parent.l = nodeId;
+            grid[cell] = color;
+            stack.push([child, nodeId, 0, cell]);
+        }
+
+        tree = newTree;
+        currentNodeId = 'r';
+        updateUI();
+    }
+
+    function showToast(msg) {
+        const el = document.createElement('div');
+        el.textContent = msg;
+        el.style = `
+            position:fixed; bottom:20px; right:20px;
+            background:#333; color:#fff; padding:8px 12px;
+            border-radius:6px; opacity:0.9; z-index:1000;
+        `;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 1500);
+    }
+
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        fileHandle = null;
+        loadFromFile(file);
+        e.target.value = '';
+    });
+
+    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); goBack(); });
+    document.addEventListener('contextmenu', (e) => {
+        if (allowsNativeContextMenu(e.target)) return;
+        suppressLongPressMenu(e);
+    }, { capture: true });
+    document.addEventListener('selectstart', (e) => {
+        if (!shouldBlockSelection(e.target)) return;
+        e.preventDefault();
+    }, { capture: true });
+    document.addEventListener('dragstart', (e) => {
+        if (!shouldBlockSelection(e.target)) return;
+        e.preventDefault();
+    }, { capture: true });
+    if (isTouchMain()) {
+        document.addEventListener('touchmove', (e) => {
+            const allowScroll = commentArea.contains(e.target) || commentPanel.contains(e.target);
+            if (!allowScroll) e.preventDefault();
+        }, { passive: false });
+        document.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+        for (const eventName of ['gesturestart', 'gesturechange', 'gestureend']) {
+            document.addEventListener(eventName, (e) => {
+                e.preventDefault();
+            }, { passive: false });
+        }
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!currentOpenControlMenu) return;
+        const elements = getControlMenuElements(currentOpenControlMenu);
+        if (elements.button.contains(e.target) || elements.menu.contains(e.target)) return;
+        closeControlMenus();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeControlMenus();
+    });
+
+    document.addEventListener('dragover', (e) => {
+        e.preventDefault();
+    });
+
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        if (!file.name.endsWith('.lib') && !file.name.endsWith('.gz')) {
+            alert(getCurrentTranslation().dropFile);
+            return;
+        }
+        loadFromFile(file);
+        fileHandle = null;
+    });
+
+    commentArea.addEventListener('focus', (e) => {
+        if (isTouchMain()) e.target.blur();
+    });
+
+    initGame();
+    const savedAppSettings = restoreAppSettingsFromLocalStorage();
+    if (savedAppSettings) {
+        applyAppSettings(savedAppSettings);
+    } else {
+        applyColorScheme();
+    }
+</script>
+</body>
+</html>

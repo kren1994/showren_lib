@@ -366,8 +366,11 @@
                         </span>
                     </button>
                     <div id="fileMenu" class="control-menu-popup" hidden>
-                        <button id="fileOpenActionBtn" class="control-menu-item" type="button" onclick="openFileFromMenu()">読込</button>
+                        <button id="fileDeleteMoveActionBtn" class="control-menu-item" type="button" onclick="deleteCurrentNodeFromMenu()">一手削除</button>
                         <button id="fileRenjuPortalActionBtn" class="control-menu-item" type="button" onclick="copyRenjuPortalLinkFromMenu()">RenjuPortal</button>
+                        <button id="fileOpenActionBtn" class="control-menu-item" type="button" onclick="openFileFromMenu()">読込</button>
+                        <button id="fileExportActionBtn" class="control-menu-item" type="button" onclick="exportKifuFromMenu()">書出</button>
+                        <button id="fileSaveActionBtn" class="control-menu-item" type="button" onclick="saveKifuWithConfirmFromMenu()">保存</button>
                     </div>
                 </div>
             </div>
@@ -400,7 +403,8 @@
     </div>
     <div class="right-pane">
         <div id="guideText" class="guide">
-            ・<b>Ctrl+O</b> で .lib を読込 / <b>Ctrl+F</b> で記号等表示切替<br>
+            ・<b>Ctrl+O</b> で .lib を読込 / <b>Ctrl+S</b> で書出 / <b>Ctrl+Shift+S</b> でブラウザに保存<br>
+            ・<b>Delete</b> で 1 手削除 / <b>Ctrl+F</b> で記号等表示切替<br>
             ・<b>←→</b> で進退 / <b>↑↓</b> で分岐移動 / 盤クリックで着手選択
         </div>
         <div id="commentPanel" class="tab-panel comment-panel active">
@@ -431,8 +435,11 @@
     const fileMenuBtn = document.getElementById('fileMenuBtn');
     const fileMenu = document.getElementById('fileMenu');
     const languageActionBtn = document.getElementById('languageActionBtn');
+    const fileDeleteMoveActionBtn = document.getElementById('fileDeleteMoveActionBtn');
     const fileRenjuPortalActionBtn = document.getElementById('fileRenjuPortalActionBtn');
     const fileOpenActionBtn = document.getElementById('fileOpenActionBtn');
+    const fileExportActionBtn = document.getElementById('fileExportActionBtn');
+    const fileSaveActionBtn = document.getElementById('fileSaveActionBtn');
     const viewMenuBtn = document.getElementById('viewMenuBtn');
     const viewMenu = document.getElementById('viewMenu');
     const cycleBoardThemeActionBtn = document.getElementById('cycleBoardThemeActionBtn');
@@ -460,9 +467,30 @@
         firstChild: null,  // Int32Array  最初の子（無ければ -1）
         nextSibling: null, // Int32Array  次の兄弟（無ければ -1）
         lastSel: null,     // Int32Array  最後に選んだ子（無ければ -1）
-        comments: null,    // Map<id, string>
-        texts: null,       // Map<id, string>
+        src: null,         // Uint8Array 読み込んだ .lib 全体（文字列の実体）
+        comments: null,    // Map<id, number>  offset*2^24 + length で src を指す
+        texts: null,       // Map<id, number>
+        flagsExtra: null,  // Uint8Array 既知外のフラグビット（書出しで温存する）
+        textExt: null,     // Uint16Array テキストフラグ時の 2 バイト拡張フィールド
+        decoder: new TextDecoder(),
     };
+
+    // コメント/盤上テキストは元ファイルの生バイト位置（オフセット+長さの
+    // パック数値）で持ち、表示の瞬間だけデコードする。書出しがバイト忠実に
+    // なる（TextEncoder は UTF-8 しか書けず shift_jis / gb18030 を再エンコード
+    // できない）うえ、数十万件でも view オブジェクトを持たずに済む。
+    const PACK_BASE = 16777216; // 2^24（長さの上限。オフセットは 2^29 まで）
+    function packSpan(view) {
+        return view.byteOffset * PACK_BASE + view.length;
+    }
+    function spanBytes(packed) {
+        const len = packed % PACK_BASE;
+        return lib.src.subarray((packed - len) / PACK_BASE, (packed - len) / PACK_BASE + len);
+    }
+    function libDecode(packed) {
+        if (!packed) return '';
+        return lib.decoder.decode(spanBytes(packed)).replace(/\r\n/g, '\n').trim();
+    }
     let currentNode = 0;
     let showHints = true, showCoords = true, showMoveNumbers = true;
 
@@ -494,6 +522,17 @@
             renjuPortal: 'RenjuPortal',
             renjuPortalCopied: 'RenjuPortal のリンクをコピーしました',
             open: '読込',
+            deleteMove: '一手削除',
+            export: '書出',
+            save: '保存',
+            saveCompleted: '保存しました',
+            exportCompleted: '書出完了',
+            exportCompletedWithName: ({ name }) => `書出完了: ${name}`,
+            exportFailed: '書出しに失敗しました',
+            localSaveFailed: '保存に失敗しました',
+            overwriteConfirm: '上書き保存しますか？',
+            libFileDescription: 'RenLib ファイル',
+            deleteCurrentNodeConfirm: '現在の手以降の変化を削除します。よろしいですか？',
             coords: '座標',
             boardTheme: '盤面色',
             colorScheme: '配色',
@@ -503,7 +542,7 @@
             moveNumbers: '手数',
             stoneShading: '石の陰影',
             hints: '記号等',
-            guideHtml: '・<b>Ctrl+O</b> で .lib を読込 / <b>Ctrl+F</b> で記号等表示切替<br>・<b>←→</b> で進退 / <b>↑↓</b> で分岐移動 / 盤クリックで着手選択',
+            guideHtml: '・<b>Ctrl+O</b> で .lib を読込 / <b>Ctrl+S</b> で書出 / <b>Ctrl+Shift+S</b> でブラウザに保存<br>・<b>Delete</b> で 1 手削除 / <b>Ctrl+F</b> で記号等表示切替<br>・<b>←→</b> で進退 / <b>↑↓</b> で分岐移動 / 盤クリックで着手選択',
             commentPlaceholder: '...',
             loadFailed: '読込失敗（RenLib の .lib ファイルを指定してください）',
             gzipUnsupported: 'このブラウザは .gz の読込に対応していません。新しめのブラウザで開いてください。',
@@ -518,6 +557,17 @@
             renjuPortal: 'RenjuPortal',
             renjuPortalCopied: '已复制 RenjuPortal 链接',
             open: '读取',
+            deleteMove: '删除一手',
+            export: '导出',
+            save: '保存',
+            saveCompleted: '已保存',
+            exportCompleted: '已导出',
+            exportCompletedWithName: ({ name }) => `已导出：${name}`,
+            exportFailed: '导出失败',
+            localSaveFailed: '保存失败',
+            overwriteConfirm: '要覆盖保存吗？',
+            libFileDescription: 'RenLib 文件',
+            deleteCurrentNodeConfirm: '将删除当前手及其后的变化。确定吗？',
             coords: '坐标',
             boardTheme: '棋盘色',
             colorScheme: '配色',
@@ -527,7 +577,7 @@
             moveNumbers: '手数',
             stoneShading: '棋子阴影',
             hints: '符号等',
-            guideHtml: '・按 <b>Ctrl+O</b> 读取 .lib / 按 <b>Ctrl+F</b> 切换符号显示<br>・<b>←→</b> 前进后退 / <b>↑↓</b> 切换分支 / 点击棋盘选择着法',
+            guideHtml: '・按 <b>Ctrl+O</b> 读取 .lib / 按 <b>Ctrl+S</b> 导出 / 按 <b>Ctrl+Shift+S</b> 保存到浏览器<br>・按 <b>Delete</b> 删除一手 / 按 <b>Ctrl+F</b> 切换符号显示<br>・<b>←→</b> 前进后退 / <b>↑↓</b> 切换分支 / 点击棋盘选择着法',
             commentPlaceholder: '...',
             loadFailed: '读取失败（请选择 RenLib 的 .lib 文件）',
             gzipUnsupported: '此浏览器不支持读取 .gz 文件，请使用较新的浏览器。',
@@ -566,7 +616,12 @@
     }
 
     let currentOpenControlMenu = null;
+    let modified = false; // 一手削除後・未保存のとき true（beforeunload の警告用）
     const SETTINGS_LOCAL_STORAGE_KEY = 'showren-lib-settings';
+    const SAVE_DB_NAME = 'showren-lib-local-save';
+    const SAVE_STORE_NAME = 'library';
+    const SAVE_RECORD_KEY = 'latest';
+    let saveDbPromise = null;
 
     function setupCanvas() {
         bgCanvas.width = LOGICAL_W * dpr; bgCanvas.height = LOGICAL_H * dpr;
@@ -587,16 +642,21 @@
         lib.firstChild = new Int32Array([-1]);
         lib.nextSibling = new Int32Array([-1]);
         lib.lastSel = new Int32Array([-1]);
+        lib.flagsExtra = new Uint8Array(1);
+        lib.textExt = new Uint16Array(1);
+        lib.src = null;
         lib.comments = new Map();
         lib.texts = new Map();
+        lib.decoder = new TextDecoder();
         currentNode = 0;
+        modified = false;
         setupCanvas();
         updateUI();
     }
 
     function updateUI() {
         ctx.clearRect(0, 0, LOGICAL_W, LOGICAL_H);
-        commentArea.value = lib.comments.get(currentNode) || '';
+        commentArea.value = libDecode(lib.comments.get(currentNode));
         drawStonesAndMarks();
     }
 
@@ -831,7 +891,7 @@
         if (showHints) {
             for (let cid = lib.firstChild[currentNode]; cid !== -1; cid = lib.nextSibling[cid]) {
                 const sx = MARGIN_L + lib.xs[cid] * CELL_SIZE, sy = MARGIN_T + lib.ys[cid] * CELL_SIZE;
-                const tx = lib.texts.get(cid) || '';
+                const tx = libDecode(lib.texts.get(cid));
                 if (tx) {
                     const size = Math.floor(CELL_SIZE * (tx.length >= 3 ? 0.34 : (tx.length === 2 ? 0.42 : 0.48)));
                     ctx.font = `bold ${size}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -881,8 +941,11 @@
 
     function updateFileMenuButtons() {
         const text = getCurrentTranslation();
+        fileDeleteMoveActionBtn.textContent = text.deleteMove;
         fileRenjuPortalActionBtn.textContent = text.renjuPortal;
         fileOpenActionBtn.textContent = text.open;
+        fileExportActionBtn.textContent = text.export;
+        fileSaveActionBtn.textContent = text.save;
     }
 
     function applyLanguage() {
@@ -1147,7 +1210,9 @@
     document.addEventListener('keydown', (e) => {
         if (e.ctrlKey || e.metaKey) {
             const key = e.key.toLowerCase();
-            if (key === 'o') { e.preventDefault(); openFile(); }
+            if (key === 's' && e.shiftKey) { e.preventDefault(); saveKifu(); }
+            else if (key === 's') { e.preventDefault(); exportKifu(); }
+            else if (key === 'o') { e.preventDefault(); openFile(); }
             else if (key === 'f') { e.preventDefault(); toggleHints(); }
             return;
         }
@@ -1160,6 +1225,7 @@
             case 'ArrowRight': e.preventDefault(); goNext(); break;
             case 'ArrowUp': e.preventDefault(); goToPrevBranch(); break;
             case 'ArrowDown': e.preventDefault(); goToNextBranch(); break;
+            case 'Delete': deleteCurrentNode(); break;
         }
     });
 
@@ -1229,7 +1295,11 @@
         offset += 2;
         const x = moveByte === 0 ? -1 : (moveByte & 0x0f) - 1;
         const y = moveByte === 0 ? -1 : moveByte >> 4;
-        if (flag & 0x01) offset += 2; // テキストありのときのパディング
+        let ext = 1; // テキストフラグ時の 2 バイト拡張（既定値は観測値の 00 01）
+        if (flag & 0x01) {
+            ext = ((bytes[offset] || 0) << 8) | (bytes[offset + 1] || 0);
+            offset += 2;
+        }
 
         const readString = () => {
             const start = offset;
@@ -1244,6 +1314,8 @@
         const text = (flag & 0x01) ? readString() : null;
         return {
             x, y, comment, text,
+            flagExtra: flag & ~(0x01 | 0x08 | 0x40 | 0x80),
+            ext,
             hasChild: !(flag & 0x40),
             hasSibling: !!(flag & 0x80),
             offset,
@@ -1287,17 +1359,6 @@
             return;
         }
         const decoder = new TextDecoder(detectLibEncoding(bytes));
-        const interned = new Map(); // 'C' 等の頻出短文字列を共有してメモリ節約
-        const decode = (raw) => {
-            if (!raw || !raw.length) return '';
-            const s = decoder.decode(raw).replace(/\r\n/g, '\n').trim();
-            if (s.length <= 8) {
-                const hit = interned.get(s);
-                if (hit !== undefined) return hit;
-                interned.set(s, s);
-            }
-            return s;
-        };
 
         // 1 ノード平均 3 バイトで見積もり、足りなければ倍々で伸ばす
         let cap = Math.max(1024, (bytes.length / 3) | 0);
@@ -1305,6 +1366,7 @@
         let moves = new Uint8Array(cap);
         let parents = new Int32Array(cap), firstChild = new Int32Array(cap);
         let nextSibling = new Int32Array(cap), lastSel = new Int32Array(cap);
+        let flagsExtra = new Uint8Array(cap), textExt = new Uint16Array(cap);
         xs[0] = -1; ys[0] = -1;
         parents[0] = -1; firstChild[0] = -1; nextSibling[0] = -1; lastSel[0] = -1;
         const comments = new Map(), texts = new Map();
@@ -1317,26 +1379,28 @@
             xs = g(xs, Int8Array); ys = g(ys, Int8Array); moves = g(moves, Uint8Array);
             parents = g(parents, Int32Array); firstChild = g(firstChild, Int32Array);
             nextSibling = g(nextSibling, Int32Array); lastSel = g(lastSel, Int32Array);
+            flagsExtra = g(flagsExtra, Uint8Array); textExt = g(textExt, Uint16Array);
         };
 
-        // 親 parentId へ (x, y) の子を付ける。既存なら合流（文字列は先勝ち）。
-        const attach = (parentId, x, y, comment, text) => {
+        // 親 parentId へ子を付ける。既存なら合流（文字列・フラグは先勝ち）。
+        const attach = (parentId, e) => {
             let prev = -1;
             for (let c = firstChild[parentId]; c !== -1; c = nextSibling[c]) {
-                if (xs[c] === x && ys[c] === y) {
-                    if (comment && !comments.has(c)) { const s = decode(comment); if (s) comments.set(c, s); }
-                    if (text && !texts.has(c)) { const s = decode(text); if (s) texts.set(c, s); }
+                if (xs[c] === e.x && ys[c] === e.y) {
+                    if (e.comment && e.comment.length && !comments.has(c)) comments.set(c, packSpan(e.comment));
+                    if (e.text && e.text.length && !texts.has(c)) { texts.set(c, packSpan(e.text)); textExt[c] = e.ext; }
                     return c;
                 }
                 prev = c;
             }
             if (count >= cap) grow();
             const id = count++;
-            xs[id] = x; ys[id] = y; moves[id] = moves[parentId] + 1;
+            xs[id] = e.x; ys[id] = e.y; moves[id] = moves[parentId] + 1;
             parents[id] = parentId; firstChild[id] = -1; nextSibling[id] = -1; lastSel[id] = -1;
+            flagsExtra[id] = e.flagExtra; textExt[id] = e.ext;
             if (prev === -1) firstChild[parentId] = id; else nextSibling[prev] = id;
-            if (comment) { const s = decode(comment); if (s) comments.set(id, s); }
-            if (text) { const s = decode(text); if (s) texts.set(id, s); }
+            if (e.comment && e.comment.length) comments.set(id, packSpan(e.comment));
+            if (e.text && e.text.length) texts.set(id, packSpan(e.text));
             return id;
         };
 
@@ -1346,19 +1410,25 @@
             return;
         }
         let offset = entry.offset;
-        let rootComment = '';
+        let rootComment = null;
+        let rootFlagExtra = 0;
         if (entry.x < 0) {
-            rootComment = decode(entry.comment); // 先頭の手なしノード＝ルート
+            rootComment = entry.comment; // 先頭の手なしノード＝ルート
+            rootFlagExtra = entry.flagExtra;
             if (!entry.hasChild) {
                 initGame();
-                if (rootComment) lib.comments.set(0, rootComment);
+                lib.decoder = decoder;
+                lib.src = bytes;
+                if (rootComment && rootComment.length) lib.comments.set(0, packSpan(rootComment));
                 updateUI();
                 return;
             }
             entry = readLibEntry(bytes, offset);
             if (!entry) {
                 initGame();
-                if (rootComment) lib.comments.set(0, rootComment);
+                lib.decoder = decoder;
+                lib.src = bytes;
+                if (rootComment && rootComment.length) lib.comments.set(0, packSpan(rootComment));
                 updateUI();
                 return;
             }
@@ -1372,7 +1442,7 @@
             if (cell < 0 || grid[cell]) {
                 return [parentEff, parentEff, 0, e.hasChild, e.hasSibling, -1]; // 繋ぎ替え
             }
-            const id = attach(parentEff, e.x, e.y, e.comment, e.text);
+            const id = attach(parentEff, e);
             grid[cell] = moves[id] % 2 === 1 ? 1 : 2;
             return [id, parentEff, 0, e.hasChild, e.hasSibling, cell];
         };
@@ -1401,10 +1471,246 @@
         lib.xs = xs; lib.ys = ys; lib.moves = moves;
         lib.parents = parents; lib.firstChild = firstChild;
         lib.nextSibling = nextSibling; lib.lastSel = lastSel;
+        lib.src = bytes;
         lib.comments = comments; lib.texts = texts;
-        if (rootComment) comments.set(0, rootComment);
+        lib.flagsExtra = flagsExtra; lib.textExt = textExt;
+        flagsExtra[0] = rootFlagExtra;
+        lib.decoder = decoder;
+        if (rootComment && rootComment.length) comments.set(0, packSpan(rootComment));
         currentNode = 0;
+        modified = false;
         updateUI();
+    }
+
+    // ---- RenLib (.lib) ライター ----------------------------------------
+    // 読み込んだ生バイトをそのまま書き戻すので、コメントの文字コードは
+    // 元ファイルのまま保たれる（削除した枝だけが消える）。
+    function buildLibBytes() {
+        let buf = new Uint8Array(1 << 20);
+        let len = 0;
+        const ensure = (n) => {
+            while (len + n > buf.length) {
+                const next = new Uint8Array(buf.length * 2);
+                next.set(buf);
+                buf = next;
+            }
+        };
+        const put = (arr) => { ensure(arr.length); buf.set(arr, len); len += arr.length; };
+        const putByte = (b) => { ensure(1); buf[len++] = b; };
+
+        put(new Uint8Array([0xff, 0x52, 0x65, 0x6e, 0x4c, 0x69, 0x62, 0xff, 0x03, 0x00,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
+
+        const putString = (raw) => {
+            put(raw);
+            putByte(0);
+            if ((raw.length + 1) % 2) putByte(0); // 2B 境界
+        };
+        const writeEntry = (id, isRoot, hasSibling) => {
+            const comment = lib.comments.has(id) ? spanBytes(lib.comments.get(id)) : null;
+            const text = (!isRoot && lib.texts.has(id)) ? spanBytes(lib.texts.get(id)) : null;
+            let flag = lib.flagsExtra[id]; // 既知外のビットを温存
+            if (lib.firstChild[id] === -1) flag |= 0x40;
+            if (hasSibling) flag |= 0x80;
+            if (comment && comment.length) flag |= 0x08;
+            if (text && text.length) flag |= 0x01;
+            putByte(isRoot ? 0 : ((lib.xs[id] + 1) | (lib.ys[id] << 4)));
+            putByte(flag);
+            if (flag & 0x01) { // 2 バイト拡張フィールド（読み込んだ値を書き戻す）
+                putByte((lib.textExt[id] >> 8) & 0xff);
+                putByte(lib.textExt[id] & 0xff);
+            }
+            if (flag & 0x08) putString(comment);
+            if (flag & 0x01) putString(text);
+        };
+
+        writeEntry(0, true, false);
+        // 先行順 DFS（子 → 部分木 → 兄弟）。パーサの読み順と同一。
+        const pending = [];
+        let id = lib.firstChild[0];
+        while (id !== -1) {
+            writeEntry(id, false, lib.nextSibling[id] !== -1);
+            const child = lib.firstChild[id];
+            const sib = lib.nextSibling[id];
+            if (child !== -1) {
+                if (sib !== -1) pending.push(sib);
+                id = child;
+            } else if (sib !== -1) {
+                id = sib;
+            } else {
+                id = pending.length ? pending.pop() : -1;
+            }
+        }
+        return buf.subarray(0, len);
+    }
+
+    // ---- 一手削除 --------------------------------------------------------
+    function deleteCurrentNode() {
+        if (currentNode === 0) return;
+        if (!confirm(getCurrentTranslation().deleteCurrentNodeConfirm)) return;
+        const target = currentNode;
+        const parent = lib.parents[target];
+        if (lib.firstChild[parent] === target) {
+            lib.firstChild[parent] = lib.nextSibling[target];
+        } else {
+            let c = lib.firstChild[parent];
+            while (lib.nextSibling[c] !== target) c = lib.nextSibling[c];
+            lib.nextSibling[c] = lib.nextSibling[target];
+        }
+        if (lib.lastSel[parent] === target) lib.lastSel[parent] = -1;
+        // 部分木のコメント/テキストを掃除（配列側は未使用領域として残る）
+        const stack = [target];
+        while (stack.length) {
+            const id = stack.pop();
+            lib.comments.delete(id);
+            lib.texts.delete(id);
+            for (let c = lib.firstChild[id]; c !== -1; c = lib.nextSibling[c]) stack.push(c);
+        }
+        modified = true;
+        currentNode = parent;
+        updateUI();
+    }
+
+    function deleteCurrentNodeFromMenu() {
+        closeControlMenus();
+        deleteCurrentNode();
+    }
+
+    // ---- 書出し（.lib ファイル）------------------------------------------
+    function buildShareFile() {
+        return new File([buildLibBytes()], `renjulib_${Date.now()}.lib`,
+            { type: 'application/octet-stream' });
+    }
+
+    function downloadLib() {
+        const blob = new Blob([buildLibBytes()], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `renjulib_${Date.now()}.lib`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        modified = false;
+        showToast(getCurrentTranslation().exportCompleted);
+    }
+
+    async function gzipBytesToBlob(bytes) {
+        const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+        return new Response(stream).blob();
+    }
+
+    async function exportKifuToFile() {
+        const bytes = buildLibBytes();
+        if (!window.showSaveFilePicker) { downloadLib(); return; }
+        try {
+            if (!fileHandle) {
+                fileHandle = await window.showSaveFilePicker({
+                    suggestedName: `renjulib_${Date.now()}.lib`,
+                    types: [{ description: getCurrentTranslation().libFileDescription, accept: { 'application/octet-stream': ['.lib'] } }],
+                });
+            }
+            const writable = await fileHandle.createWritable();
+            // .gz を開いて上書き保存したときは gzip のまま書き戻す
+            if (fileHandle.name.toLowerCase().endsWith('.gz') && typeof CompressionStream === 'function') {
+                await writable.write(await gzipBytesToBlob(bytes));
+            } else {
+                await writable.write(bytes);
+            }
+            await writable.close();
+            modified = false;
+            showToast(getCurrentTranslation().exportCompletedWithName({ name: fileHandle.name }));
+        } catch (e) {
+            // キャンセル or エラー → 何もしない
+        }
+    }
+
+    async function exportKifu() {
+        const text = getCurrentTranslation();
+        if (!isTouchMain()) {
+            await exportKifuToFile();
+            return;
+        }
+        if (!navigator.share) {
+            downloadLib();
+            return;
+        }
+        const file = buildShareFile();
+        const shareData = { title: document.title, files: [file] };
+        try {
+            if (!navigator.canShare || navigator.canShare(shareData)) {
+                await navigator.share(shareData);
+                modified = false;
+                showToast(text.exportCompleted);
+            } else {
+                downloadLib();
+            }
+        } catch (e) {
+            if (e && e.name === 'AbortError') return;
+            showToast(text.exportFailed);
+        }
+    }
+
+    function exportKifuFromMenu() {
+        closeControlMenus();
+        exportKifu();
+    }
+
+    // ---- 保存（IndexedDB。iPhone でファイルを開き直さずに続きから見る用）----
+    function openSaveDatabase() {
+        if (saveDbPromise) return saveDbPromise;
+        saveDbPromise = new Promise((resolve, reject) => {
+            const request = window.indexedDB.open(SAVE_DB_NAME, 1);
+            request.onupgradeneeded = () => {
+                const db = request.result;
+                if (!db.objectStoreNames.contains(SAVE_STORE_NAME)) {
+                    db.createObjectStore(SAVE_STORE_NAME);
+                }
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error || new Error('IndexedDB open failed'));
+        });
+        return saveDbPromise;
+    }
+
+    async function readSavedRecord() {
+        if (!window.indexedDB) return null;
+        const db = await openSaveDatabase();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(SAVE_STORE_NAME, 'readonly');
+            const request = tx.objectStore(SAVE_STORE_NAME).get(SAVE_RECORD_KEY);
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => reject(request.error || new Error('IndexedDB read failed'));
+        });
+    }
+
+    async function saveKifu() {
+        try {
+            if (!window.indexedDB) throw new Error('IndexedDB unavailable');
+            const bytes = buildLibBytes();
+            const db = await openSaveDatabase();
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(SAVE_STORE_NAME, 'readwrite');
+                tx.objectStore(SAVE_STORE_NAME).put({ bytes: bytes.slice().buffer, savedAt: Date.now() }, SAVE_RECORD_KEY);
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error || new Error('IndexedDB write failed'));
+            });
+            modified = false;
+            showToast(getCurrentTranslation().saveCompleted);
+        } catch (e) {
+            showToast(getCurrentTranslation().localSaveFailed);
+        }
+    }
+
+    async function saveKifuWithConfirm() {
+        try {
+            const existing = await readSavedRecord();
+            if (existing && !confirm(getCurrentTranslation().overwriteConfirm)) return;
+        } catch (e) { /* 読めない場合はそのまま保存へ */ }
+        await saveKifu();
+    }
+
+    function saveKifuWithConfirmFromMenu() {
+        closeControlMenus();
+        saveKifuWithConfirm();
     }
 
     function showToast(msg) {
@@ -1486,6 +1792,12 @@
         if (isTouchMain()) e.target.blur();
     });
 
+    window.addEventListener('beforeunload', (e) => {
+        if (!modified) return;
+        e.preventDefault();
+        e.returnValue = '';
+    });
+
     initGame();
     const savedAppSettings = restoreAppSettingsFromLocalStorage();
     if (savedAppSettings) {
@@ -1493,6 +1805,13 @@
     } else {
         applyColorScheme();
     }
+    readSavedRecord()
+        .then((saved) => {
+            if (saved && saved.bytes) loadFromLibBytes(new Uint8Array(saved.bytes));
+        })
+        .catch(() => {
+            // 復元失敗は無視してまっさらな盤で始める
+        });
 </script>
 </body>
 </html>

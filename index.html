@@ -1051,7 +1051,8 @@
         const px = Math.round((mouseX - MARGIN_L) / CELL_SIZE), py = Math.round((mouseY - MARGIN_T) / CELL_SIZE);
         if (px < 0 || px >= BOARD_SIZE || py < 0 || py >= BOARD_SIZE) return;
 
-        // 候補手をクリック → その手へ。経路上の石をクリック → その手まで戻る。
+        // 候補手をクリック → その手へ。盤上の石をクリック → 1 手進む
+        // （showren と同じ挙動）。
         for (let cid = lib.firstChild[currentNode]; cid !== -1; cid = lib.nextSibling[cid]) {
             if (lib.xs[cid] === px && lib.ys[cid] === py) {
                 lib.lastSel[currentNode] = cid;
@@ -1062,8 +1063,7 @@
         }
         for (let id = currentNode; id > 0; id = lib.parents[id]) {
             if (lib.xs[id] === px && lib.ys[id] === py) {
-                currentNode = id;
-                updateUI();
+                goNext();
                 return;
             }
         }

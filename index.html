@@ -492,7 +492,14 @@
     }
     function libDecode(packed) {
         if (!packed) return '';
-        return lib.decoder.decode(spanBytes(packed)).replace(/\r\n/g, '\n').trim();
+        // RenLib 旧形式はコメントを「タイトル 0x08 本文」で持つ（タイトルが
+        // 空だと先頭に 0x08）。0x08 は改行に変換し、その他の制御文字は豆腐
+        // （□）になるだけなので除去する。書出しは生バイトのままなので不変。
+        return lib.decoder.decode(spanBytes(packed))
+            .replace(/\r\n/g, '\n')
+            .replace(/\x08/g, '\n')
+            .replace(/[\x00-\x07\x0b\x0c\x0e-\x1f\x7f]/g, '')
+            .trim();
     }
     let currentNode = 0;
     let showHints = true, showCoords = true, showMoveNumbers = true;

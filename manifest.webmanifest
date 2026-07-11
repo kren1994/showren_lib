@@ -1,0 +1,24 @@
+{
+    "name": "showren_lib ライブラリビューア",
+    "short_name": "showren_lib",
+    "description": "RenLib（.lib）の定石ライブラリをブラウザで閲覧できるビューア。コメント・盤上テキストの表示、一手削除と書き出しに対応。",
+    "lang": "ja",
+    "start_url": ".",
+    "scope": ".",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#f3efe6",
+    "theme_color": "#f3efe6",
+    "icons": [
+        {
+            "src": "icons/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}

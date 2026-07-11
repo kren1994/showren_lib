@@ -398,7 +398,10 @@
                     </div>
                 </div>
             </div>
-            <input type="file" id="fileInput" class="visually-hidden-file-input" accept=".lib,.gz" tabindex="-1" aria-hidden="true">
+            <!-- accept を付けない: iOS Safari は accept を UTI に変換してフィルタ
+                 するが、.lib は未知の拡張子のため全ファイルがグレーアウトして
+                 選べなくなる。中身はマジックバイトで検証するので絞り込み不要。 -->
+            <input type="file" id="fileInput" class="visually-hidden-file-input" tabindex="-1" aria-hidden="true">
         </div>
     </div>
     <div class="right-pane">

@@ -374,7 +374,7 @@
                         <button id="fileRenjuPortalActionBtn" class="control-menu-item" type="button" onclick="copyRenjuPortalLinkFromMenu()">RenjuPortal</button>
                         <button id="fileOpenActionBtn" class="control-menu-item" type="button" onclick="openFileFromMenu()">読込</button>
                         <button id="fileExportActionBtn" class="control-menu-item" type="button" onclick="exportKifuFromMenu()">書出</button>
-                        <button id="fileSaveActionBtn" class="control-menu-item" type="button" onclick="saveKifuWithConfirmFromMenu()">保存</button>
+                        <button id="fileSaveActionBtn" class="control-menu-item" type="button" onclick="saveKifuFromMenu()">保存</button>
                     </div>
                 </div>
             </div>
@@ -544,7 +544,6 @@
             exportCompletedWithName: ({ name }) => `書出完了: ${name}`,
             exportFailed: '書出しに失敗しました',
             localSaveFailed: '保存に失敗しました',
-            overwriteConfirm: '上書き保存しますか？',
             libFileDescription: 'RenLib ファイル',
             deleteCurrentNodeConfirm: '現在の手以降の変化を削除します。よろしいですか？',
             coords: '座標',
@@ -579,7 +578,6 @@
             exportCompletedWithName: ({ name }) => `已导出：${name}`,
             exportFailed: '导出失败',
             localSaveFailed: '保存失败',
-            overwriteConfirm: '要覆盖保存吗？',
             libFileDescription: 'RenLib 文件',
             deleteCurrentNodeConfirm: '将删除当前手及其后的变化。确定吗？',
             coords: '坐标',
@@ -1714,17 +1712,11 @@
         }
     }
 
-    async function saveKifuWithConfirm() {
-        try {
-            const existing = await readSavedRecord();
-            if (existing && !confirm(getCurrentTranslation().overwriteConfirm)) return;
-        } catch (e) { /* 読めない場合はそのまま保存へ */ }
-        await saveKifu();
-    }
-
-    function saveKifuWithConfirmFromMenu() {
+    // 保存先はスロット 1 つ（起動時に自動復元する「しおり」）で、上書きで
+    // 失うのは前回のしおりだけ。選択肢のない確認は出さない。
+    function saveKifuFromMenu() {
         closeControlMenus();
-        saveKifuWithConfirm();
+        saveKifu();
     }
 
     function showToast(msg) {

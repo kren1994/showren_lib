@@ -150,6 +150,13 @@
         .left-pane, .right-pane { flex: 1 1 100%; max-width: 650px; display: flex; flex-direction: column; gap: 12px; margin: 0 auto; }
         .right-pane { position: relative; min-height: 0; }
         .board-container { position: relative; width: 100%; display: flex; justify-content: center; }
+        .current-file-name {
+            width: 100%; max-width: 620px; min-height: 17px; box-sizing: border-box; margin: 0 auto -12px;
+            padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            color: var(--faint); font-size: 12px; line-height: 1.4; text-align: center;
+        }
+        .current-file-name[hidden] { display: none; }
+        .current-file-name:not([hidden]) + .board-container { padding-top: 0; }
         .canvas-stack { position: relative; display: inline-block; }
         /* The board is the one floating object: a soft drop shadow lifts it off
            the paper. Dimmed slightly in dark mode via --board-dim. */
@@ -365,6 +372,7 @@
 
 <div class="container">
     <div class="left-pane">
+        <div id="currentFileName" class="current-file-name" hidden></div>
         <div class="board-container"><div class="canvas-stack"><canvas id="bgCanvas"></canvas><canvas id="boardCanvas"></canvas></div></div>
         <div class="board-controls">
             <div class="ctrl-left">
@@ -452,6 +460,7 @@
     const leftPane = document.querySelector('.left-pane');
     const rightPane = document.querySelector('.right-pane');
     const boardControls = document.querySelector('.board-controls');
+    const currentFileName = document.getElementById('currentFileName');
     const fileMenuBtn = document.getElementById('fileMenuBtn');
     const fileMenu = document.getElementById('fileMenu');
     const languageActionBtn = document.getElementById('languageActionBtn');
@@ -1491,6 +1500,13 @@
 
     let fileHandle = null;
 
+    function setCurrentFileName(name) {
+        const fileName = (name || '').trim();
+        currentFileName.textContent = fileName;
+        currentFileName.title = fileName;
+        currentFileName.hidden = !fileName;
+    }
+
     function openFallbackFilePicker() {
         fileInput.value = '';
         if (typeof fileInput.showPicker === 'function') {
@@ -1533,7 +1549,7 @@
                 const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
                 bytes = new Uint8Array(await new Response(stream).arrayBuffer());
             }
-            loadFromLibBytes(bytes);
+            loadFromLibBytes(bytes, file.name);
         } catch (e) {
             alert(getCurrentTranslation().loadFailed);
         }
@@ -1613,11 +1629,12 @@
     // オブジェクトも作らないので、数百万ノードでもメモリはノードあたり
     // ~15 バイト + コメント/テキスト分に収まる。無効手（盤外・重複着手）は
     // 木に載せず、その子を親へ繋ぎ替える。重複する兄弟は合流させる。
-    function loadFromLibBytes(bytes) {
+    function loadFromLibBytes(bytes, sourceFileName = '') {
         if (bytes.length < 20 || !LIB_MAGIC.every((b, i) => bytes[i] === b)) {
             alert(getCurrentTranslation().loadFailed);
             return;
         }
+        setCurrentFileName(sourceFileName);
         const decoder = new TextDecoder(detectLibEncoding(bytes));
 
         // 1 ノード平均 3 バイトで見積もり、足りなければ倍々で伸ばす
@@ -1906,6 +1923,7 @@
             }
             await writable.close();
             modified = false;
+            setCurrentFileName(fileHandle.name);
             showToast(getCurrentTranslation().exportCompletedWithName({ name: fileHandle.name }));
         } catch (e) {
             // キャンセル or エラー → 何もしない

@@ -480,7 +480,193 @@
         flagsExtra: null,  // Uint8Array 既知外のフラグビット（書出しで温存する）
         textExt: null,     // Uint16Array テキストフラグ時の 2 バイト拡張フィールド
         decoder: new TextDecoder(),
+        // ---- 局面の合流（transposition）用。表示層だけで使う派生データで、
+        // ストレージ構造（書出し）には一切関与しない。----
+        hashHi: null,      // Uint32Array 正準ハッシュ上位32bit（D4 対称で最小のレーン）
+        hashLo: null,      // Uint32Array 正準ハッシュ下位32bit
+        tIdx: null,        // Uint8Array  格納座標系→正準座標系の対称変換番号（0-7）
+        dead: null,        // Uint8Array  削除済みノード（索引は再構築せずこれで除外）
+        sortedIds: null,   // Uint32Array id を (hashHi,hashLo) 昇順に並べた索引
     };
+
+    // ==== D4 対称ユーティリティ ==========================================
+    // 盤の8対称（恒等・回転3種・鏡映4種）。i は 0-7。
+    const LAST = 14; // BOARD_SIZE - 1
+    function applySym(i, x, y) {
+        switch (i) {
+            case 0: return [x, y];
+            case 1: return [y, LAST - x];
+            case 2: return [LAST - x, LAST - y];
+            case 3: return [LAST - y, x];
+            case 4: return [LAST - x, y];
+            case 5: return [x, LAST - y];
+            case 6: return [y, x];
+            case 7: return [LAST - y, LAST - x];
+        }
+    }
+
+    // COMPOSE[a][b] = 「b を適用してから a を適用」に等しい単一の対称番号。
+    // INV[a] = a の逆対称。手書きだと規約ミスの元なので、2 つのプローブ点
+    // (1,2) と (5,3) の両方が一致する番号を全探索して求める。
+    const SYM_COUNT = 8;
+    const COMPOSE = [];
+    for (let a = 0; a < SYM_COUNT; a++) {
+        const row = new Array(SYM_COUNT).fill(-1);
+        for (let b = 0; b < SYM_COUNT; b++) {
+            const [ix1, iy1] = applySym(b, 1, 2);
+            const [tx1, ty1] = applySym(a, ix1, iy1);
+            const [ix2, iy2] = applySym(b, 5, 3);
+            const [tx2, ty2] = applySym(a, ix2, iy2);
+            for (let c = 0; c < SYM_COUNT; c++) {
+                const [cx1, cy1] = applySym(c, 1, 2);
+                const [cx2, cy2] = applySym(c, 5, 3);
+                if (cx1 === tx1 && cy1 === ty1 && cx2 === tx2 && cy2 === ty2) { row[b] = c; break; }
+            }
+        }
+        COMPOSE.push(row);
+    }
+    const INV = new Array(SYM_COUNT).fill(-1);
+    for (let a = 0; a < SYM_COUNT; a++) {
+        for (let b = 0; b < SYM_COUNT; b++) {
+            if (COMPOSE[a][b] === 0) { INV[a] = b; break; }
+        }
+    }
+
+    // ==== Zobrist カノニカルハッシュ ======================================
+    // 起動のたびに乱数表を作り直す（ファイルには一切書き出さない派生値なので
+    // セッションをまたいで安定させる必要はない）。
+    const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
+    function randomUint32() { return Math.random() * 0x100000000 >>> 0; }
+    const zobLo = [null, new Uint32Array(CELL_COUNT), new Uint32Array(CELL_COUNT)]; // index=color(1,2)
+    const zobHi = [null, new Uint32Array(CELL_COUNT), new Uint32Array(CELL_COUNT)];
+    for (let color = 1; color <= 2; color++) {
+        for (let cell = 0; cell < CELL_COUNT; cell++) {
+            zobLo[color][cell] = randomUint32();
+            zobHi[color][cell] = randomUint32();
+        }
+    }
+    // SYMCELL[i][cell] = セル cell (=x*15+y) を対称 i で写した先のセル。
+    const SYMCELL = [];
+    for (let i = 0; i < SYM_COUNT; i++) {
+        const arr = new Int16Array(CELL_COUNT);
+        for (let cell = 0; cell < CELL_COUNT; cell++) {
+            const x = (cell / BOARD_SIZE) | 0, y = cell % BOARD_SIZE;
+            const [sx, sy] = applySym(i, x, y);
+            arr[cell] = sx * BOARD_SIZE + sy;
+        }
+        SYMCELL.push(arr);
+    }
+    // 8 レーンの走行ハッシュから辞書順最小（hi優先、同値ならlo、更に同値なら
+    // 小さい i）を選ぶ。これが「正準」レーン = カノニカル座標系への変換番号。
+    function pickCanonicalLane(laneHi, laneLo) {
+        let best = 0;
+        for (let i = 1; i < SYM_COUNT; i++) {
+            if (laneHi[i] < laneHi[best] || (laneHi[i] === laneHi[best] && laneLo[i] < laneLo[best])) best = i;
+        }
+        return best;
+    }
+
+    // id を (hashHi, hashLo) の辞書順で安定ソートする。LSD 基数ソート
+    // （16bit×4パス、各パスは 65536 バケットのカウンティングソート）で O(N)。
+    function buildSortedIds(count, hashHi, hashLo) {
+        let src = new Uint32Array(count);
+        for (let i = 0; i < count; i++) src[i] = i;
+        let dst = new Uint32Array(count);
+        const bucket = new Uint32Array(65537);
+        const passes = [
+            (id) => hashLo[id] & 0xffff,
+            (id) => (hashLo[id] >>> 16) & 0xffff,
+            (id) => hashHi[id] & 0xffff,
+            (id) => (hashHi[id] >>> 16) & 0xffff,
+        ];
+        for (const keyOf of passes) {
+            bucket.fill(0);
+            for (let i = 0; i < count; i++) bucket[keyOf(src[i]) + 1]++;
+            for (let k = 0; k < 65536; k++) bucket[k + 1] += bucket[k];
+            for (let i = 0; i < count; i++) {
+                const id = src[i];
+                dst[bucket[keyOf(id)]++] = id;
+            }
+            const tmp = src; src = dst; dst = tmp;
+        }
+        return src;
+    }
+
+    function cmpHash(aHi, aLo, bHi, bLo) {
+        if (aHi !== bHi) return aHi < bHi ? -1 : 1;
+        if (aLo !== bLo) return aLo < bLo ? -1 : 1;
+        return 0;
+    }
+
+    // sortedIds 中で id と同一 (hashHi,hashLo) の区間 [start, end) を二分探索。
+    function findClassRange(id) {
+        const hi = lib.hashHi[id], lo = lib.hashLo[id];
+        const arr = lib.sortedIds;
+        let a = 0, b = arr.length;
+        while (a < b) {
+            const mid = (a + b) >>> 1, m = arr[mid];
+            if (cmpHash(lib.hashHi[m], lib.hashLo[m], hi, lo) < 0) a = mid + 1; else b = mid;
+        }
+        const start = a;
+        b = arr.length;
+        while (a < b) {
+            const mid = (a + b) >>> 1, m = arr[mid];
+            if (cmpHash(lib.hashHi[m], lib.hashLo[m], hi, lo) <= 0) a = mid + 1; else b = mid;
+        }
+        return [start, a];
+    }
+
+    // id の経路上の石（ルートを除く）を Map<cell, color> で返す。
+    function getPathStoneCells(id) {
+        const map = new Map();
+        for (let n = id; n > 0; n = lib.parents[n]) {
+            map.set(lib.xs[n] * BOARD_SIZE + lib.ys[n], lib.moves[n] % 2 === 1 ? 1 : 2);
+        }
+        return map;
+    }
+
+    // memberId の経路上の石を対称 sigma で写したとき、targetSet（cell→color）と
+    // 完全一致するかどうか（ハッシュ衝突ガード。O(手数)）。
+    function pathMatchesUnderSym(memberId, sigma, targetSet) {
+        let matched = 0;
+        for (let n = memberId; n > 0; n = lib.parents[n]) {
+            const [sx, sy] = applySym(sigma, lib.xs[n], lib.ys[n]);
+            if (targetSet.get(sx * BOARD_SIZE + sy) !== (lib.moves[n] % 2 === 1 ? 1 : 2)) return false;
+            matched++;
+        }
+        return matched === targetSet.size;
+    }
+
+    // nodeId と同一局面の全ノード（合流先も含む）から子を集める。
+    // 返り値: [{ childId, sigma, borrowed }]（sigma は「子の格納座標系 →
+    // nodeId の格納座標系」への変換）。nodeId 自身の子を最初に列挙し、以降は
+    // sortedIds 順。写した先のセルが重複する場合は先勝ち（自前の子が優先）。
+    function getMergedChildEntries(nodeId) {
+        const [start, end] = findClassRange(nodeId);
+        const arr = lib.sortedIds;
+        const targetPath = getPathStoneCells(nodeId);
+        const results = [];
+        const seenCell = new Set();
+        const addChildrenOf = (memberId, sigma, borrowed) => {
+            for (let c = lib.firstChild[memberId]; c !== -1; c = lib.nextSibling[c]) {
+                const [dx, dy] = applySym(sigma, lib.xs[c], lib.ys[c]);
+                const cell = dx * BOARD_SIZE + dy;
+                if (seenCell.has(cell)) continue;
+                seenCell.add(cell);
+                results.push({ childId: c, sigma, borrowed });
+            }
+        };
+        addChildrenOf(nodeId, 0, false);
+        for (let k = start; k < end; k++) {
+            const M = arr[k];
+            if (M === nodeId || lib.dead[M]) continue;
+            if (lib.moves[M] !== lib.moves[nodeId]) continue;
+            const sigma = COMPOSE[INV[lib.tIdx[nodeId]]][lib.tIdx[M]];
+            if (!pathMatchesUnderSym(M, sigma, targetPath)) continue;
+            addChildrenOf(M, sigma, true);
+        }
+        return results;
+    }
 
     // コメント/盤上テキストは元ファイルの生バイト位置（オフセット+長さの
     // パック数値）で持ち、表示の瞬間だけデコードする。書出しがバイト忠実に
@@ -506,13 +692,17 @@
             .trim();
     }
     let currentNode = 0;
+    // 表示座標 = applySym(viewT, 格納座標)（currentNode の格納座標系に対して）。
+    // 合流先（borrowed）の続きへ進むと変わる。initGame / loadFromLibBytes で 0 に戻す。
+    let viewT = 0;
+    // 直近の updateUI で描画した候補手（合流込み）。クリック判定と goNext が使う。
+    // [{ childId, dispX, dispY, nextViewT, borrowed }]
+    let mergedChildrenView = [];
     let showHints = true, showCoords = true, showMoveNumbers = true;
 
+    // 分岐判定は合流込みの子の数で行う（他経路からの継続も枝として数える）。
     function childCountAtLeast(id, n) {
-        let c = lib.firstChild[id];
-        let seen = 0;
-        while (c !== -1 && seen < n) { seen++; c = lib.nextSibling[c]; }
-        return seen >= n;
+        return getMergedChildEntries(id).length >= n;
     }
     let stoneShadingEnabled = false;
     // Palette principle (from playren): the board is always a step darker than
@@ -656,11 +846,17 @@
         lib.lastSel = new Int32Array([-1]);
         lib.flagsExtra = new Uint8Array(1);
         lib.textExt = new Uint16Array(1);
+        lib.hashHi = new Uint32Array(1);
+        lib.hashLo = new Uint32Array(1);
+        lib.tIdx = new Uint8Array(1);
+        lib.dead = new Uint8Array(1);
+        lib.sortedIds = new Uint32Array([0]);
         lib.src = null;
         lib.comments = new Map();
         lib.texts = new Map();
         lib.decoder = new TextDecoder();
         currentNode = 0;
+        viewT = 0;
         modified = false;
         setupCanvas();
         updateUI();
@@ -860,7 +1056,8 @@
         const path = [];
         for (let id = currentNode; id > 0; id = lib.parents[id]) path.unshift(id);
         for (const id of path) {
-            let sx = MARGIN_L + lib.xs[id] * CELL_SIZE, sy = MARGIN_T + lib.ys[id] * CELL_SIZE;
+            const [dispX, dispY] = applySym(viewT, lib.xs[id], lib.ys[id]);
+            let sx = MARGIN_L + dispX * CELL_SIZE, sy = MARGIN_T + dispY * CELL_SIZE;
             const isBlack = lib.moves[id] % 2 === 1;
             const node = { m: lib.moves[id] };
             drawStoneBody(sx, sy, CELL_SIZE * 0.45, isBlack);
@@ -899,16 +1096,30 @@
             }
         }
 
-        // 候補手 = 現在ノードの子。盤上テキストがあれば文字、なければ点で示す。
+        // 候補手 = 現在ノードと同一局面の全ノード（合流込み）の子。盤上テキスト
+        // があれば文字、なければ点で示す。ナビゲーション（goNext・クリック）が
+        // 使うので、表示 ON/OFF に関わらず毎回組み立てる。
+        mergedChildrenView = [];
+        for (const entry of getMergedChildEntries(currentNode)) {
+            const nextViewT = COMPOSE[viewT][entry.sigma];
+            const [dispX, dispY] = applySym(nextViewT, lib.xs[entry.childId], lib.ys[entry.childId]);
+            mergedChildrenView.push({ childId: entry.childId, dispX, dispY, nextViewT, borrowed: entry.borrowed });
+        }
         if (showHints) {
-            for (let cid = lib.firstChild[currentNode]; cid !== -1; cid = lib.nextSibling[cid]) {
-                const sx = MARGIN_L + lib.xs[cid] * CELL_SIZE, sy = MARGIN_T + lib.ys[cid] * CELL_SIZE;
-                const tx = libDecode(lib.texts.get(cid));
+            for (const { dispX, dispY, childId, borrowed } of mergedChildrenView) {
+                const sx = MARGIN_L + dispX * CELL_SIZE, sy = MARGIN_T + dispY * CELL_SIZE;
+                const tx = libDecode(lib.texts.get(childId));
                 if (tx) {
                     const size = Math.floor(CELL_SIZE * (tx.length >= 3 ? 0.34 : (tx.length === 2 ? 0.42 : 0.48)));
                     ctx.font = `bold ${size}px Arial`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'; ctx.lineWidth = 3.5; ctx.strokeText(tx, sx, sy);
-                    ctx.fillStyle = '#555'; ctx.fillText(tx, sx, sy);
+                    // 合流先（borrowed）はうっすら区別: 塗りを薄くする（ハローは維持）。
+                    ctx.fillStyle = borrowed ? 'rgba(85, 85, 85, 0.6)' : '#555';
+                    ctx.fillText(tx, sx, sy);
+                } else if (borrowed) {
+                    // 合流先の点は中抜き円で「自前ではない」ことを示す。
+                    ctx.beginPath(); ctx.strokeStyle = 'rgba(128, 128, 128, 0.7)'; ctx.lineWidth = 1.5;
+                    ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.stroke();
                 } else {
                     ctx.beginPath(); ctx.fillStyle = 'rgba(128, 128, 128, 0.8)';
                     ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
@@ -1053,18 +1264,21 @@
         const px = Math.round((mouseX - MARGIN_L) / CELL_SIZE), py = Math.round((mouseY - MARGIN_T) / CELL_SIZE);
         if (px < 0 || px >= BOARD_SIZE || py < 0 || py >= BOARD_SIZE) return;
 
-        // 候補手をクリック → その手へ。盤上の石をクリック → 1 手進む
+        // 候補手（合流込み）をクリック → その手へ。盤上の石をクリック → 1 手進む
         // （showren と同じ挙動）。
-        for (let cid = lib.firstChild[currentNode]; cid !== -1; cid = lib.nextSibling[cid]) {
-            if (lib.xs[cid] === px && lib.ys[cid] === py) {
-                lib.lastSel[currentNode] = cid;
-                currentNode = cid;
+        for (const entry of mergedChildrenView) {
+            if (entry.dispX === px && entry.dispY === py) {
+                // 合流先（borrowed）は「自前の子」ではないので lastSel は触らない。
+                if (!entry.borrowed) lib.lastSel[currentNode] = entry.childId;
+                viewT = entry.nextViewT;
+                currentNode = entry.childId;
                 updateUI();
                 return;
             }
         }
         for (let id = currentNode; id > 0; id = lib.parents[id]) {
-            if (lib.xs[id] === px && lib.ys[id] === py) {
+            const [dx, dy] = applySym(viewT, lib.xs[id], lib.ys[id]);
+            if (dx === px && dy === py) {
                 goNext();
                 return;
             }
@@ -1118,7 +1332,8 @@
     function getCurrentMovePath() {
         const path = [];
         for (let id = currentNode; id > 0; id = lib.parents[id]) {
-            path.unshift({ x: lib.xs[id], y: lib.ys[id] });
+            const [x, y] = applySym(viewT, lib.xs[id], lib.ys[id]);
+            path.unshift({ x, y });
         }
         return path;
     }
@@ -1199,10 +1414,25 @@
         return lib.firstChild[id];
     }
 
+    // 親は同じ格納座標系なので viewT は変えない（合流先を辿ったあとに戻ると
+    // 「相手側の経路」を遡ることになるが、これは仕様）。
     function goBack() { if (lib.parents[currentNode] !== -1) { currentNode = lib.parents[currentNode]; updateUI(); } }
     function goNext() {
-        const target = getPreferredChildId(currentNode);
-        if (target !== -1) { currentNode = target; updateUI(); }
+        const last = lib.lastSel[currentNode];
+        if (last !== -1) { currentNode = last; updateUI(); return; } // 自前の子: viewT 不変
+        // 自前の子が未選択なら、合流込みの候補手の先頭へ（クリックと同じ手順）。
+        let entries = mergedChildrenView;
+        if (!entries.length) {
+            entries = getMergedChildEntries(currentNode).map((e) => ({
+                childId: e.childId, nextViewT: COMPOSE[viewT][e.sigma], borrowed: e.borrowed,
+            }));
+        }
+        if (!entries.length) return;
+        const entry = entries[0];
+        if (!entry.borrowed) lib.lastSel[currentNode] = entry.childId;
+        viewT = entry.nextViewT;
+        currentNode = entry.childId;
+        updateUI();
     }
     function goToPrevBranch() {
         let curr = currentNode;
@@ -1379,11 +1609,26 @@
         let parents = new Int32Array(cap), firstChild = new Int32Array(cap);
         let nextSibling = new Int32Array(cap), lastSel = new Int32Array(cap);
         let flagsExtra = new Uint8Array(cap), textExt = new Uint16Array(cap);
+        // 合流（transposition）用の派生データ。ルート(id=0)は hashHi/Lo=0, tIdx=0
+        // のまま（typed array の既定値）でよい。
+        let hashHi = new Uint32Array(cap), hashLo = new Uint32Array(cap);
+        let tIdx = new Uint8Array(cap), dead = new Uint8Array(cap);
         xs[0] = -1; ys[0] = -1;
         parents[0] = -1; firstChild[0] = -1; nextSibling[0] = -1; lastSel[0] = -1;
         const comments = new Map(), texts = new Map();
         let count = 1;
         const grid = new Uint8Array(BOARD_SIZE * BOARD_SIZE);
+        // 8 対称レーンの走行ハッシュ（現在の DFS 経路 = root→現ノードの石を
+        // 全レーンで XOR 累積）。石を置く/外すときに同じ XOR を適用すれば
+        // undo になる。
+        const laneLo = new Uint32Array(SYM_COUNT), laneHi = new Uint32Array(SYM_COUNT);
+        const xorLane = (color, cell) => {
+            for (let i = 0; i < SYM_COUNT; i++) {
+                const sc = SYMCELL[i][cell];
+                laneLo[i] ^= zobLo[color][sc];
+                laneHi[i] ^= zobHi[color][sc];
+            }
+        };
 
         const grow = () => {
             cap *= 2;
@@ -1392,6 +1637,8 @@
             parents = g(parents, Int32Array); firstChild = g(firstChild, Int32Array);
             nextSibling = g(nextSibling, Int32Array); lastSel = g(lastSel, Int32Array);
             flagsExtra = g(flagsExtra, Uint8Array); textExt = g(textExt, Uint16Array);
+            hashHi = g(hashHi, Uint32Array); hashLo = g(hashLo, Uint32Array);
+            tIdx = g(tIdx, Uint8Array); dead = g(dead, Uint8Array);
         };
 
         // 親 parentId へ子を付ける。既存なら合流（文字列・フラグは先勝ち）。
@@ -1447,16 +1694,24 @@
             offset = entry.offset;
         }
 
-        // フレーム: [有効ノードid, 親有効id, stage, hasChild, hasSibling, 置いたセル]
+        // フレーム: [有効ノードid, 親有効id, stage, hasChild, hasSibling, 置いたセル, 置いた色]
         const enter = (e, parentEff) => {
             const cell = (e.x >= 0 && e.x < BOARD_SIZE && e.y >= 0 && e.y < BOARD_SIZE)
                 ? e.x * BOARD_SIZE + e.y : -1;
             if (cell < 0 || grid[cell]) {
-                return [parentEff, parentEff, 0, e.hasChild, e.hasSibling, -1]; // 繋ぎ替え
+                return [parentEff, parentEff, 0, e.hasChild, e.hasSibling, -1, 0]; // 繋ぎ替え
             }
+            const prevCount = count; // attach が新規なら id === prevCount になる
             const id = attach(parentEff, e);
-            grid[cell] = moves[id] % 2 === 1 ? 1 : 2;
-            return [id, parentEff, 0, e.hasChild, e.hasSibling, cell];
+            const color = moves[id] % 2 === 1 ? 1 : 2;
+            grid[cell] = color;
+            xorLane(color, cell); // レーンは「この石を置いた後」の値にする
+            if (id === prevCount) {
+                // 新ノード: 正準ハッシュ（8レーン中の辞書順最小）を記録する。
+                const lane = pickCanonicalLane(laneHi, laneLo);
+                hashHi[id] = laneHi[lane]; hashLo[id] = laneLo[lane]; tIdx[id] = lane;
+            }
+            return [id, parentEff, 0, e.hasChild, e.hasSibling, cell, color];
         };
 
         // 行き(stage 0)で子を読み、帰り(stage 1)で盤を戻して兄弟を読む。
@@ -1471,7 +1726,7 @@
                 }
             } else {
                 stack.pop();
-                if (frame[5] >= 0) grid[frame[5]] = 0;
+                if (frame[5] >= 0) { xorLane(frame[6], frame[5]); grid[frame[5]] = 0; } // XOR は自己逆元
                 if (frame[4]) {
                     const sib = readLibEntry(bytes, offset);
                     if (sib) { offset = sib.offset; stack.push(enter(sib, frame[1])); }
@@ -1486,10 +1741,13 @@
         lib.src = bytes;
         lib.comments = comments; lib.texts = texts;
         lib.flagsExtra = flagsExtra; lib.textExt = textExt;
+        lib.hashHi = hashHi; lib.hashLo = hashLo; lib.tIdx = tIdx; lib.dead = dead;
+        lib.sortedIds = buildSortedIds(count, hashHi, hashLo);
         flagsExtra[0] = rootFlagExtra;
         lib.decoder = decoder;
         if (rootComment && rootComment.length) comments.set(0, packSpan(rootComment));
         currentNode = 0;
+        viewT = 0;
         modified = false;
         updateUI();
     }
@@ -1576,6 +1834,7 @@
             const id = stack.pop();
             lib.comments.delete(id);
             lib.texts.delete(id);
+            lib.dead[id] = 1; // 合流索引から除外（索引自体は再構築しない）
             for (let c = lib.firstChild[id]; c !== -1; c = lib.nextSibling[c]) stack.push(c);
         }
         modified = true;

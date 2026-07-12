@@ -253,6 +253,9 @@
         }
         .nav-btn.branch { width: 3.8em; letter-spacing: -0.08em; }
         .nav-btn.step { width: 4.9em; }
+        .nav-btn.reset-view { width: 3.8em; letter-spacing: 0; }
+        .nav-icon { display: inline-flex; width: 20px; height: 20px; }
+        .nav-icon svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
         /* Comment: the review core. Borderless soft-fill that reads as part of
            the paper; a quiet ring appears on focus. */
         textarea {
@@ -306,11 +309,13 @@
             .control-icon { width: 20px; height: 20px; }
             .nav-btn { height: 42px; }
             .nav-btn.branch { width: 3em; }
+            .nav-btn.reset-view { width: 3em; }
             .nav-btn.step { width: 4.5em; }
         }
         @media (min-width: 600px) and (max-width: 1199px) {
             .ctrl-center { gap: 6px; }
             .nav-btn.branch { width: 3.6em; }
+            .nav-btn.reset-view { width: 3.6em; }
             .nav-btn.step { width: 5.1em; }
         }
         @media (max-width: 1199px) {
@@ -381,6 +386,14 @@
             <div class="ctrl-center">
                 <button class="nav-btn branch" type="button" onclick="goToPrevBranch()">&lt;&lt;</button>
                 <button class="nav-btn step" type="button" onclick="goBack()">&lt;</button>
+                <button class="nav-btn reset-view" type="button" aria-label="正位置に戻す" onclick="resetViewTransform()">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                            <path d="M21 3v6h-6"/>
+                        </svg>
+                    </span>
+                </button>
                 <button class="nav-btn step" type="button" onclick="goNext()">&gt;</button>
                 <button class="nav-btn branch" type="button" onclick="goToNextBranch()">&gt;&gt;</button>
             </div>
@@ -1417,6 +1430,11 @@
     // 親は同じ格納座標系なので viewT は変えない（合流先を辿ったあとに戻ると
     // 「相手側の経路」を遡ることになるが、これは仕様）。
     function goBack() { if (lib.parents[currentNode] !== -1) { currentNode = lib.parents[currentNode]; updateUI(); } }
+    function resetViewTransform() {
+        if (viewT === 0) return;
+        viewT = 0;
+        updateUI();
+    }
     function goNext() {
         const last = lib.lastSel[currentNode];
         if (last !== -1) { currentNode = last; updateUI(); return; } // 自前の子: viewT 不変

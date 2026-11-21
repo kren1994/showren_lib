@@ -662,7 +662,10 @@
 
     // sortedIds 中で id と同一 (hashHi,hashLo) の区間 [start, end) を二分探索。
     function findClassRange(id) {
-        const hi = lib.hashHi[id], lo = lib.hashLo[id];
+        return findHashRange(lib.hashHi[id], lib.hashLo[id]);
+    }
+
+    function findHashRange(hi, lo) {
         const arr = lib.sortedIds;
         let a = 0, b = arr.length;
         while (a < b) {
@@ -786,6 +789,11 @@
             language: '言語',
             languageShort: '日',
             renjuPortal: 'RenjuPortal',
+            moveSequenceCopied: '現在局面までの手順をコピーしました',
+            moveSequenceCopyFailed: '手順をクリップボードにコピーできません',
+            moveSequencePasted: ({ moves }) => `${moves}手目まで図が一致する局面へ移動しました`,
+            moveSequenceNotFound: '一致する局面が見つかりません',
+            moveSequenceInvalid: '棋譜テキストの形式が正しくありません',
             renjuPortalCopied: 'RenjuPortal のリンクをコピーしました',
             open: '読込',
             deleteMove: '一手削除',
@@ -823,6 +831,11 @@
             language: '语言',
             languageShort: '中',
             renjuPortal: 'RenjuPortal',
+            moveSequenceCopied: '已复制当前局面之前的手顺',
+            moveSequenceCopyFailed: '无法复制手顺到剪贴板',
+            moveSequencePasted: ({ moves }) => `已跳转到第 ${moves} 手图形匹配的已有局面`,
+            moveSequenceNotFound: '未找到匹配的已有局面',
+            moveSequenceInvalid: '棋谱文本格式不正确',
             renjuPortalCopied: '已复制 RenjuPortal 链接',
             open: '读取',
             deleteMove: '删除一手',
@@ -854,6 +867,8 @@
             dropFile: '请拖入 .lib 文件',
         },
     };
+    translations.ja.helpShortcutsHtml += '<br>・<b>Ctrl+C</b> 現局面までの手順をコピー / <b>Ctrl+V</b> 既存局面へ移動';
+    translations.zh.helpShortcutsHtml += '<br>・<b>Ctrl+C</b> 复制当前手顺 / <b>Ctrl+V</b> 跳转到已有局面';
     let boardThemeIndex = 0;
     let currentLanguage = 'ja';
     let colorSchemePreference = 'light';
@@ -1433,6 +1448,84 @@
         return `https://renjuportal.com/board?v=3&typ=g&mde=e&mvs=${moves}`;
     }
 
+    function buildRenjuMoveSequence() {
+        return getCurrentMovePath().map((node) => (
+            encodeRenjuPortalMoveValue(node.x) + encodeRenjuPortalMoveValue(node.y)
+        )).join('');
+    }
+
+    async function copyRenjuMoveSequence() {
+        try {
+            await copyTextToClipboard(buildRenjuMoveSequence());
+            showToast(getCurrentTranslation().moveSequenceCopied);
+        } catch (error) {
+            showToast(`${getCurrentTranslation().moveSequenceCopyFailed}: ${error.message}`);
+        }
+    }
+
+    function parseRenjuMoveSequence(sequence) {
+        const text = sequence.trim();
+        if (!text || text.length % 2 !== 0 || !/^[0-9a-e]+$/i.test(text)) return null;
+        const moves = [];
+        const occupied = new Set();
+        for (let i = 0; i < text.length; i += 2) {
+            const x = parseInt(text[i], 15), y = parseInt(text[i + 1], 15);
+            if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) return null;
+            const cell = x * BOARD_SIZE + y;
+            if (occupied.has(cell)) return null;
+            occupied.add(cell);
+            moves.push({ x, y, cell });
+        }
+        return moves;
+    }
+
+    function findDeepestRecordedPosition(sequence) {
+        const moves = parseRenjuMoveSequence(sequence);
+        if (!moves || !lib.sortedIds || !lib.hashHi) return null;
+
+        const laneHi = new Uint32Array(SYM_COUNT);
+        const laneLo = new Uint32Array(SYM_COUNT);
+        const target = new Map();
+        let best = null;
+        for (let ply = 0; ply < moves.length; ply++) {
+            const move = moves[ply];
+            const color = ply % 2 === 0 ? 1 : 2;
+            target.set(move.cell, color);
+            for (let sym = 0; sym < SYM_COUNT; sym++) {
+                const transformedCell = SYMCELL[sym][move.cell];
+                laneHi[sym] ^= zobHi[color][transformedCell];
+                laneLo[sym] ^= zobLo[color][transformedCell];
+            }
+
+            const inputTransform = pickCanonicalLane(laneHi, laneLo);
+            const [start, end] = findHashRange(laneHi[inputTransform], laneLo[inputTransform]);
+            for (let i = start; i < end; i++) {
+                const id = lib.sortedIds[i];
+                if (id === 0 || lib.dead[id] || lib.moves[id] !== ply + 1) continue;
+                const candidateToInput = COMPOSE[INV[inputTransform]][lib.tIdx[id]];
+                if (pathMatchesUnderSym(id, candidateToInput, target)) {
+                    best = { id, view: candidateToInput, length: ply + 1 };
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    function jumpToRenjuMoveSequence(sequence) {
+        const result = findDeepestRecordedPosition(sequence);
+        if (!result) {
+            const valid = parseRenjuMoveSequence(sequence);
+            showToast(getCurrentTranslation()[valid ? 'moveSequenceNotFound' : 'moveSequenceInvalid']);
+            return false;
+        }
+        currentNode = result.id;
+        viewT = result.view;
+        updateUI();
+        showToast(getCurrentTranslation().moveSequencePasted({ moves: result.length }));
+        return true;
+    }
+
     async function copyTextToClipboard(text) {
         if (navigator.clipboard && window.isSecureContext) {
             await navigator.clipboard.writeText(text);
@@ -1540,7 +1633,14 @@
     document.addEventListener('keydown', (e) => {
         if (e.ctrlKey || e.metaKey) {
             const key = e.key.toLowerCase();
-            if (key === 's' && e.shiftKey) { e.preventDefault(); saveKifu(); }
+            if (key === 'c') {
+                const target = e.target instanceof HTMLElement ? e.target : null;
+                if (target && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+                if (document.activeElement === commentArea) return;
+                e.preventDefault();
+                copyRenjuMoveSequence();
+            }
+            else if (key === 's' && e.shiftKey) { e.preventDefault(); saveKifu(); }
             else if (key === 's') { e.preventDefault(); exportKifu(); }
             else if (key === 'o') { e.preventDefault(); openFile(); }
             else if (key === 'f') { e.preventDefault(); toggleHints(); }
@@ -1557,6 +1657,16 @@
             case 'ArrowDown': e.preventDefault(); goToNextBranch(); break;
             case 'Delete': deleteCurrentNode(); break;
         }
+    });
+
+    document.addEventListener('paste', (e) => {
+        const target = e.target instanceof HTMLElement ? e.target : null;
+        if ((target && target.closest('input, textarea, select, [contenteditable="true"]'))
+                || document.activeElement === commentArea) return;
+        const text = e.clipboardData && e.clipboardData.getData('text/plain');
+        if (!text || !/^[\s]*[0-9a-e]+[\s]*$/i.test(text) || text.trim().length % 2 !== 0) return;
+        e.preventDefault();
+        jumpToRenjuMoveSequence(text);
     });
 
     let fileHandle = null;
